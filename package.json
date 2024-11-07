@@ -1,0 +1,35 @@
+{
+  "name": "lzc-dtl",
+  "version": "1.0.1",
+  "description": "懒猫微服应用转换器",
+  "main": "src/index.js",
+  "bin": {
+    "lzc-dtl": "./bin/lzc-dtl.js"
+  },
+  "dependencies": {
+    "archiver": "^5.3.1",
+    "commander": "^11.1.0",
+    "fs-extra": "^11.2.0",
+    "inquirer": "^8.2.4",
+    "yaml": "^2.3.4"
+  },
+  "keywords": [
+    "lazycat",
+    "converter",
+    "docker",
+    "compose"
+  ],
+  "author": "glzjin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/lzc-dtl.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/lzc-dtl/issues"
+  },
+  "homepage": "https://github.com/yourusername/lzc-dtl#readme",
+  "engines": {
+    "node": ">=12.0.0"
+  }
+}

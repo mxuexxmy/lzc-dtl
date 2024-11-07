@@ -1,0 +1,6 @@
+node_modules
+*.log
+*.lpk
+manifest.yml
+icon.png
+.idea
