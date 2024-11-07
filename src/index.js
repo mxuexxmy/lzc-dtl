@@ -3,6 +3,7 @@ const YAML = require('yaml');
 const fs = require('fs-extra');
 const path = require('path');
 const archiver = require('archiver');
+const tar = require('tar');
 
 // 新增：获取目录下的文件列表
 async function getFilesList(extensions) {
@@ -380,13 +381,62 @@ async function convertApp(options = {}) {
             }));
         }
 
-        // 转换 services
+        // 创建 lzc_content 目录
+        const contentDir = path.join(process.cwd(), 'lzc_content');
+        await fs.ensureDir(contentDir);
+
+        // 在处理 services 的部分进行修改
         for (const [name, service] of Object.entries(composeData.services)) {
             if (name === 'app') continue;
 
             manifest.services[name] = {
                 image: service.image
             };
+
+            // 处理 volumes
+            if (service.volumes) {
+                manifest.services[name].volumes = [];
+                
+                for (const volume of service.volumes) {
+                    // 解析 volume 配置
+                    const parts = volume.split(':');
+                    const sourcePath = parts[0];
+                    const targetPath = parts[1];
+                    
+                    // 检查是否是相对路径或绝对路径
+                    if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
+                        // 命名卷，直接使用 /lzcapp/var/data
+                        manifest.services[name].volumes.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
+                        continue;
+                    }
+
+                    // 获取源路径的绝对路径
+                    const absoluteSourcePath = path.resolve(process.cwd(), sourcePath);
+                    
+                    try {
+                        // 检查源路径是否存在且是目录
+                        const stats = await fs.stat(absoluteSourcePath);
+                        
+                        if (stats.isDirectory()) {
+                            // 目录存在，复制到 lzc_content
+                            const dirName = path.basename(sourcePath);
+                            const contentPath = path.join(contentDir, dirName);
+                            
+                            // 复制目录内容
+                            await fs.copy(absoluteSourcePath, contentPath);
+                            
+                            // 使用 /lzcapp/pkg/content 路径
+                            manifest.services[name].volumes.push(`/lzcapp/pkg/content/${dirName}:${targetPath}`);
+                        } else {
+                            // 如果是文件或其他类型，使用 /lzcapp/var/data
+                            manifest.services[name].volumes.push(`/lzcapp/var/data/${path.basename(sourcePath)}:${targetPath}`);
+                        }
+                    } catch (error) {
+                        // 如果路径不存在，使用 /lzcapp/var/data
+                        manifest.services[name].volumes.push(`/lzcapp/var/data/${path.basename(sourcePath)}:${targetPath}`);
+                    }
+                }
+            }
 
             if (service.environment) {
                 // 转换 environment 格式
@@ -423,6 +473,19 @@ async function convertApp(options = {}) {
         // 复制图标文件
         await fs.copy(iconPath, 'icon.png');
 
+        // 如果 lzc_content 目录不为空，创建 content.tar
+        const contentFiles = await fs.readdir(contentDir);
+        if (contentFiles.length > 0) {
+            await tar.create(
+                {
+                    file: 'content.tar',
+                    cwd: contentDir,
+                    portable: true,
+                },
+                contentFiles
+            );
+        }
+
         // 创建 lpk 文件
         const output = fs.createWriteStream(`${answers.package}.lpk`);
         const archive = archiver('zip');
@@ -431,10 +494,28 @@ async function convertApp(options = {}) {
         archive.file('manifest.yml', { name: 'manifest.yml' });
         archive.file('icon.png', { name: 'icon.png' });
 
+        // 如果存在 content.tar，将其添加到压缩包
+        if (contentFiles.length > 0) {
+            archive.file('content.tar', { name: 'content.tar' });
+        }
+
         await archive.finalize();
+
+        // 清理临时文件
+        await fs.remove(contentDir);
+        if (contentFiles.length > 0) {
+            await fs.remove('content.tar');
+        }
 
         console.log('转换完成！');
     } catch (error) {
+        // 确保清理临时文件
+        try {
+            await fs.remove(contentDir);
+            await fs.remove('content.tar');
+        } catch (cleanupError) {
+            console.error('清理临时文件失败:', cleanupError);
+        }
         throw new Error(`处理文件时出错：${error.message}`);
     }
 }

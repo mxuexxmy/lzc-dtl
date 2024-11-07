@@ -11,7 +11,8 @@
     "commander": "^11.1.0",
     "fs-extra": "^11.2.0",
     "inquirer": "^8.2.4",
-    "yaml": "^2.3.4"
+    "yaml": "^2.3.4",
+    "tar": "^6.2.0"
   },
   "keywords": [
     "lazycat",
