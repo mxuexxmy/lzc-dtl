@@ -4,6 +4,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const archiver = require('archiver');
 const tar = require('tar');
+const dotenv = require('dotenv');
 
 // 新增：获取目录下的文件列表
 async function getFilesList(extensions) {
@@ -381,73 +382,150 @@ async function convertApp(options = {}) {
             }));
         }
 
-        // 创建 lzc_content 目录
-        const contentDir = path.join(process.cwd(), 'lzc_content');
-        await fs.ensureDir(contentDir);
+        // 在处理 services 的部分之前，直接在当前目录创建 content.tar
+        const executionDir = process.cwd(); // 获取 lzc-dtl 执行的目录
 
-        // 在处理 services 的部分进行修改
+        // 创建 content.tar，包含当前目录下的所有文件和目录
+        await tar.create(
+            {
+                file: 'content.tar',
+                cwd: executionDir,
+                portable: true,
+                // 排除一些不需要的文件和目录
+                filter: (path) => {
+                    const excludes = ['node_modules', '.git', '*.lpk', 'content.tar'];
+                    return !excludes.some(exclude => path.includes(exclude));
+                }
+            },
+            await fs.readdir(executionDir)
+        );
+
+        // Load environment variables from .env file
+        const envPath = path.join(process.cwd(), '.env');
+        const envConfig = dotenv.config({ path: envPath }).parsed || {};
+
+        // 修改 services 处理逻辑
         for (const [name, service] of Object.entries(composeData.services)) {
-            if (name === 'app') continue;
+            // 检查服务是否有 image
+            if (!service.image) {
+                const imageActionAnswer = await inquirer.prompt([{
+                    type: 'list',
+                    name: 'action',
+                    message: `服务 ${name} 没有指定镜像。请选择操作：`,
+                    choices: [
+                        { name: '输入镜像名', value: 'inputImage' },
+                        { name: '自动构建并推送镜像', value: 'autoBuild' }
+                    ],
+                    default: 'inputImage'
+                }]);
+
+                if (imageActionAnswer.action === 'inputImage') {
+                    const imageNameAnswer = await inquirer.prompt([{
+                        type: 'input',
+                        name: 'imageName',
+                        message: `请输入服务 ${name} 的镜像名：`
+                    }]);
+                    service.image = imageNameAnswer.imageName;
+                } else if (imageActionAnswer.action === 'autoBuild') {
+                    const buildImageNameAnswer = await inquirer.prompt([{
+                        type: 'input',
+                        name: 'buildImageName',
+                        message: `请输入服务 ${name} 的构建镜像名：`
+                    }]);
+
+                    // 假设 buildContext 是服务的构建上下文路径
+                    const buildContext = service.build.context || '.';
+                    const dockerfilePath = service.build.dockerfile || 'Dockerfile';
+
+                    // 执行 Docker 构建命令
+                    const buildCommand = `docker build -t ${buildImageNameAnswer.buildImageName} -f ${dockerfilePath} ${buildContext}`;
+                    console.log(`正在构建镜像：${buildCommand}`);
+                    require('child_process').execSync(buildCommand, { stdio: 'inherit' });
+
+                    // 执行 Docker 推送命令
+                    const pushCommand = `docker push ${buildImageNameAnswer.buildImageName}`;
+                    console.log(`正在推送镜像：${pushCommand}`);
+                    require('child_process').execSync(pushCommand, { stdio: 'inherit' });
+
+                    service.image = buildImageNameAnswer.buildImageName;
+                }
+            }
 
             manifest.services[name] = {
                 image: service.image
             };
+
+            // 处理 environment
+            if (service.env_file) {
+                // Load environment variables from specified env_file
+                const envFilePath = path.resolve(executionDir, service.env_file);
+                const fileEnvConfig = dotenv.config({ path: envFilePath }).parsed || {};
+                manifest.services[name].environment = Object.entries(fileEnvConfig).map(
+                    ([key, value]) => `${key}=${value}`
+                );
+            } else if (service.environment) {
+                // Handle inline environment variables
+                manifest.services[name].environment = [];
+
+                for (const [key, value] of Object.entries(service.environment)) {
+                    if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+                        // Extract the variable name from ${VAR_NAME}
+                        const envVarName = value.slice(2, -1);
+                        // Replace with the value from the .env file or process.env
+                        const envValue = envConfig[envVarName] || process.env[envVarName] || '';
+                        manifest.services[name].environment.push(`${key}=${envValue}`);
+                    } else {
+                        manifest.services[name].environment.push(`${key}=${value}`);
+                    }
+                }
+            }
 
             // 处理 volumes
             if (service.volumes) {
                 manifest.services[name].volumes = [];
                 
                 for (const volume of service.volumes) {
-                    // 解析 volume 配置
                     const parts = volume.split(':');
                     const sourcePath = parts[0];
                     const targetPath = parts[1];
                     
-                    // 检查是否是相对路径或绝对路径
-                    if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
-                        // 命名卷，直接使用 /lzcapp/var/data
-                        manifest.services[name].volumes.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
-                        continue;
+                    // 检查目录是否存在
+                    const absoluteSourcePath = path.resolve(executionDir, sourcePath);
+                    const directoryExists = await fs.pathExists(absoluteSourcePath);
+
+                    let choices = [
+                        { name: '挂载空目录', value: 'emptyDir' },
+                        { name: '忽略挂载', value: 'ignore' }
+                    ];
+
+                    if (directoryExists) {
+                        choices.unshift({ name: '使用目录内容', value: 'useContent' });
                     }
 
-                    // 获取源路径的绝对路径
-                    const absoluteSourcePath = path.resolve(process.cwd(), sourcePath);
-                    
-                    try {
-                        // 检查源路径是否存在且是目录
-                        const stats = await fs.stat(absoluteSourcePath);
-                        
-                        if (stats.isDirectory()) {
-                            // 目录存在，复制到 lzc_content
-                            const dirName = path.basename(sourcePath);
-                            const contentPath = path.join(contentDir, dirName);
-                            
-                            // 复制目录内容
-                            await fs.copy(absoluteSourcePath, contentPath);
-                            
-                            // 使用 /lzcapp/pkg/content 路径
-                            manifest.services[name].volumes.push(`/lzcapp/pkg/content/${dirName}:${targetPath}`);
-                        } else {
-                            // 如果是文件或其他类型，使用 /lzcapp/var/data
-                            manifest.services[name].volumes.push(`/lzcapp/var/data/${path.basename(sourcePath)}:${targetPath}`);
+                    // 询问用户如何处理挂载
+                    const volumeActionAnswer = await inquirer.prompt([{
+                        type: 'list',
+                        name: 'action',
+                        message: `如何处理目录 ${sourcePath} 的挂载？`,
+                        choices: choices,
+                        default: directoryExists ? 'useContent' : 'emptyDir'
+                    }]);
+
+                    if (volumeActionAnswer.action === 'useContent') {
+                        if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
+                            // 命名卷，使用 /lzcapp/var/data
+                            manifest.services[name].volumes.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
+                            continue;
                         }
-                    } catch (error) {
-                        // 如果路径不存在，使用 /lzcapp/var/data
+
+                        // 对于相对路径或绝对路径，都使用 /lzcapp/pkg/content 中的内容
+                        const relativePath = path.relative(executionDir, absoluteSourcePath);
+                        manifest.services[name].volumes.push(`/lzcapp/pkg/content/${relativePath}:${targetPath}`);
+                    } else if (volumeActionAnswer.action === 'emptyDir') {
+                        // 挂载空目录
                         manifest.services[name].volumes.push(`/lzcapp/var/data/${path.basename(sourcePath)}:${targetPath}`);
                     }
-                }
-            }
-
-            if (service.environment) {
-                // 转换 environment 格式
-                if (Array.isArray(service.environment)) {
-                    // 如果是数组格式，直接使用
-                    manifest.services[name].environment = service.environment;
-                } else if (typeof service.environment === 'object') {
-                    // 如果是对象格式，转换为 key=value 数组
-                    manifest.services[name].environment = Object.entries(service.environment).map(
-                        ([key, value]) => `${key}=${value}`
-                    );
+                    // If the action is 'ignore', do nothing
                 }
             }
 
@@ -470,20 +548,10 @@ async function convertApp(options = {}) {
         // 写入 manifest.yml
         await fs.writeFile('manifest.yml', YAML.stringify(manifest));
 
-        // 复制图标文件
-        await fs.copy(iconPath, 'icon.png');
-
-        // 如果 lzc_content 目录不为空，创建 content.tar
-        const contentFiles = await fs.readdir(contentDir);
-        if (contentFiles.length > 0) {
-            await tar.create(
-                {
-                    file: 'content.tar',
-                    cwd: contentDir,
-                    portable: true,
-                },
-                contentFiles
-            );
+        // 复制图标文件，如果源文件和目标文件不同才复制
+        const iconDestPath = path.join(process.cwd(), 'icon.png');
+        if (path.resolve(iconPath) !== path.resolve(iconDestPath)) {
+            await fs.copy(iconPath, iconDestPath);
         }
 
         // 创建 lpk 文件
@@ -494,24 +562,18 @@ async function convertApp(options = {}) {
         archive.file('manifest.yml', { name: 'manifest.yml' });
         archive.file('icon.png', { name: 'icon.png' });
 
-        // 如果存在 content.tar，将其添加到压缩包
-        if (contentFiles.length > 0) {
-            archive.file('content.tar', { name: 'content.tar' });
-        }
+        // 将 content.tar 添加到压缩包
+        archive.file('content.tar', { name: 'content.tar' });
 
         await archive.finalize();
 
         // 清理临时文件
-        await fs.remove(contentDir);
-        if (contentFiles.length > 0) {
-            await fs.remove('content.tar');
-        }
+        await fs.remove('content.tar');
 
         console.log('转换完成！');
     } catch (error) {
         // 确保清理临时文件
         try {
-            await fs.remove(contentDir);
             await fs.remove('content.tar');
         } catch (cleanupError) {
             console.error('清理临时文件失败:', cleanupError);
