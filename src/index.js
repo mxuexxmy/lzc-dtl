@@ -16,8 +16,42 @@ async function getFilesList(extensions) {
     });
 }
 
+// 新增：读取缓存的选择
+async function loadCache() {
+    try {
+        const cachePath = path.join(process.cwd(), '.lzc-dtl-cache.json');
+        if (await fs.pathExists(cachePath)) {
+            return await fs.readJson(cachePath);
+        }
+    } catch (error) {
+        console.warn('读取缓存失败:', error.message);
+    }
+    return {};
+}
+
+// 新增：保存选择到缓存
+async function saveCache(cache) {
+    try {
+        const cachePath = path.join(process.cwd(), '.lzc-dtl-cache.json');
+        await fs.writeJson(cachePath, cache, { spaces: 2 });
+    } catch (error) {
+        console.warn('保存缓存失败:', error.message);
+    }
+}
+
+// 在文件开头添加这个辅助函数
+async function updateCache(cache, updates) {
+    const newCache = {
+        ...cache,
+        ...updates
+    };
+    await saveCache(newCache);
+    return newCache;
+}
+
 async function convertApp(options = {}) {
     let answers;
+    let cache = await loadCache();
     
     // 如果没有通过命令行参数提供完整信息，则通过交互式提示收集
     if (!options.nonInteractive) {
@@ -27,49 +61,56 @@ async function convertApp(options = {}) {
             questions.push({
                 type: 'input',
                 name: 'name',
-                message: '请输入应用名称：'
+                message: '请输入应用名称：',
+                default: cache.name || undefined
             });
         }
         if (!options.package) {
             questions.push({
                 type: 'input',
                 name: 'package',
-                message: '请输入应用包名：'
+                message: '请输入应用包名：',
+                default: cache.package || undefined
             });
         }
         if (!options.description) {
             questions.push({
                 type: 'input',
                 name: 'description',
-                message: '请输入应用描述：'
+                message: '请输入应用描述：',
+                default: cache.description || undefined
             });
         }
         if (!options.homepage) {
             questions.push({
                 type: 'input',
                 name: 'homepage',
-                message: '请输入应用首页：'
+                message: '请输入应用首页：',
+                default: cache.homepage || undefined
             });
         }
         if (!options.author) {
             questions.push({
                 type: 'input',
                 name: 'author',
-                message: '请输入作者：'
+                message: '请输入作者：',
+                default: cache.author || undefined
             });
         }
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
             questions.push({
                 type: 'confirm',
                 name: 'background_task',
-                message: '是否开机自启？'
+                message: '是否开机自启？',
+                default: cache.background_task || undefined
             });
         }
         if (options.multiInstance === undefined || options.multiInstance === null) {
             questions.push({
                 type: 'confirm',
                 name: 'multi_instance',
-                message: '是否多用户共享？'
+                message: '是否多用户共享？',
+                default: cache.multi_instance || undefined
             });
         }
         if (!options.publicPaths) {
@@ -77,14 +118,22 @@ async function convertApp(options = {}) {
                 type: 'input',
                 name: 'public_paths',
                 message: '需要对外暴露的页面（用逗号分隔）：',
-                default: '/'
+                default: cache.public_paths || '/',
+                validate: (input) => {
+                    const paths = input.split(',');
+                    if (paths.length === 0) {
+                        return '请输入有效的页面路径（用逗号分隔）';
+                    }
+                    return true;
+                }
             });
         }
         if (!options.subdomain) {
             questions.push({
                 type: 'input',
                 name: 'subdomain',
-                message: '请输入子域名：'
+                message: '请输入子域名：',
+                default: cache.subdomain || undefined
             });
         }
 
@@ -96,6 +145,19 @@ async function convertApp(options = {}) {
             multi_instance: options.multiInstance !== undefined ? options.multiInstance : promptAnswers.multi_instance,
             public_paths: options.publicPaths || promptAnswers.public_paths
         };
+
+        // 使用辅助函数更新缓存
+        cache = await updateCache(cache, {
+            name: answers.name,
+            package: answers.package,
+            description: answers.description,
+            homepage: answers.homepage,
+            author: answers.author,
+            background_task: answers.background_task,
+            multi_instance: answers.multi_instance,
+            public_paths: answers.public_paths,
+            subdomain: answers.subdomain
+        });
     } else {
         // 使用命令行参数时，确保这两个值有效
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
@@ -131,9 +193,13 @@ async function convertApp(options = {}) {
             name: 'iconPath',
             message: '请选择图标文件：',
             choices: imageFiles,
-            pageSize: 10
+            pageSize: 10,
+            default: cache.iconPath || undefined
         }]);
         iconPath = iconAnswer.iconPath;
+        
+        // 使用辅助函数更新缓存
+        cache = await updateCache(cache, { iconPath });
     }
 
     // 处理 docker-compose.yml
@@ -149,9 +215,13 @@ async function convertApp(options = {}) {
             name: 'composePath',
             message: '请选择 docker-compose 文件：',
             choices: yamlFiles,
-            pageSize: 10
+            pageSize: 10,
+            default: cache.composePath || undefined
         }]);
         composePath = composeAnswer.composePath;
+        
+        // 使用辅助函数更新缓存
+        cache = await updateCache(cache, { composePath });
     }
 
     // 验证选择的文件
@@ -203,8 +273,12 @@ async function convertApp(options = {}) {
                     type: 'list',
                     name: 'type',
                     message: '请选择路由类型：',
-                    choices: routeTypes
+                    choices: routeTypes,
+                    default: cache.lastRouteType || undefined
                 }]);
+
+                // 使用辅助函数更新缓存
+                cache = await updateCache(cache, { lastRouteType: routeTypeAnswer.type });
 
                 if (routeTypeAnswer.type === 'from_compose') {
                     // 从 docker-compose 读取端口
@@ -218,8 +292,13 @@ async function convertApp(options = {}) {
                                     type: 'confirm',
                                     name: 'use',
                                     message: `是否添加服务 ${serviceName} 的端口映射 ${portMapping}？`,
-                                    default: true
+                                    default: cache[`${serviceName}_port_${portMapping}_use`] || true
                                 }]);
+
+                                // 使用辅助函数更新缓存
+                                cache = await updateCache(cache, {
+                                    [`${serviceName}_port_${portMapping}_use`]: usePortAnswer.use
+                                });
 
                                 if (usePortAnswer.use) {
                                     // 询问路由类型
@@ -231,8 +310,14 @@ async function convertApp(options = {}) {
                                             { name: 'HTTP路由', value: 'http' },
                                             { name: 'HTTPS路由', value: 'https' },
                                             { name: 'TCP/UDP端口暴露', value: 'port' }
-                                        ]
+                                        ],
+                                        default: cache[`${serviceName}_port_${portMapping}_type`] || 'http'
                                     }]);
+
+                                    // 使用辅助函数更新缓存
+                                    cache = await updateCache(cache, {
+                                        [`${serviceName}_port_${portMapping}_type`]: routeTypeForPort.type
+                                    });
 
                                     if (routeTypeForPort.type === 'port') {
                                         // 询问协议类型
@@ -240,8 +325,14 @@ async function convertApp(options = {}) {
                                             type: 'list',
                                             name: 'protocol',
                                             message: '请选择协议：',
-                                            choices: ['tcp', 'udp']
+                                            choices: ['tcp', 'udp'],
+                                            default: cache[`${serviceName}_port_${portMapping}_protocol`] || 'tcp'
                                         }]);
+
+                                        // 使用辅助函数更新缓存
+                                        cache = await updateCache(cache, {
+                                            [`${serviceName}_port_${portMapping}_protocol`]: protocolAnswer.protocol
+                                        });
 
                                         routes.push({
                                             type: 'ingress',
@@ -257,8 +348,13 @@ async function convertApp(options = {}) {
                                             type: 'input',
                                             name: 'path',
                                             message: '请输入路由路径（如 /api/）：',
-                                            default: '/'
+                                            default: cache[`${serviceName}_port_${portMapping}_path`] || '/'
                                         }]);
+
+                                        // 使用辅助函数更新缓存
+                                        cache = await updateCache(cache, {
+                                            [`${serviceName}_port_${portMapping}_path`]: pathAnswer.path
+                                        });
 
                                         routes.push({
                                             type: 'http',
@@ -273,22 +369,23 @@ async function convertApp(options = {}) {
                         }
                     }
                 } else if (routeTypeAnswer.type === 'port') {
-                    // TCP/UDP端口暴露配置
                     const portConfig = await inquirer.prompt([
                         {
                             type: 'list',
                             name: 'protocol',
                             message: '请选择协议：',
-                            choices: ['tcp', 'udp']
+                            choices: ['tcp', 'udp'],
+                            default: cache.lastPortProtocol || undefined
                         },
                         {
                             type: 'input',
                             name: 'port',
                             message: '请输入端口号：',
+                            default: cache.lastPort || undefined,
                             validate: (input) => {
                                 const port = parseInt(input);
                                 if (isNaN(port) || port < 1 || port > 65535) {
-                                    return '请输入有效的端口号（1-65535）';
+                                    return '请输入���效的端口号（1-65535）';
                                 }
                                 return true;
                             }
@@ -297,10 +394,19 @@ async function convertApp(options = {}) {
                             type: 'list',
                             name: 'service',
                             message: '请选择服务：',
-                            choices: services
+                            choices: services,
+                            default: cache.lastService || undefined
                         }
                     ]);
 
+                    // 使用辅助函数更新缓存
+                    cache = await updateCache(cache, {
+                        lastPortProtocol: portConfig.protocol,
+                        lastPort: portConfig.port,
+                        lastService: portConfig.service
+                    });
+
+                    // 添加 TCP/UDP 端口路由
                     routes.push({
                         type: 'ingress',
                         config: {
@@ -309,25 +415,27 @@ async function convertApp(options = {}) {
                             service: portConfig.service
                         }
                     });
-                } else {
-                    // HTTP/HTTPS路由配置
+
+                } else if (routeTypeAnswer.type === 'http' || routeTypeAnswer.type === 'https') {
                     const httpConfig = await inquirer.prompt([
                         {
                             type: 'input',
                             name: 'path',
                             message: '请输入路由路径（如 /api/）：',
-                            default: '/'
+                            default: cache.lastHttpPath || '/'
                         },
                         {
                             type: 'list',
                             name: 'service',
                             message: '请选择服务：',
-                            choices: services
+                            choices: services,
+                            default: cache.lastHttpService || undefined
                         },
                         {
                             type: 'input',
                             name: 'port',
                             message: '请输入服务端口：',
+                            default: cache.lastHttpPort || undefined,
                             validate: (input) => {
                                 const port = parseInt(input);
                                 if (isNaN(port) || port < 1 || port > 65535) {
@@ -338,12 +446,19 @@ async function convertApp(options = {}) {
                         }
                     ]);
 
-                    const protocol = routeTypeAnswer.type;
+                    // 使用辅助函数更新缓存
+                    cache = await updateCache(cache, {
+                        lastHttpPath: httpConfig.path,
+                        lastHttpService: httpConfig.service,
+                        lastHttpPort: httpConfig.port
+                    });
+
+                    // 添加 HTTP/HTTPS 路由
                     routes.push({
                         type: 'http',
                         config: {
                             path: httpConfig.path,
-                            target: `${protocol}://${httpConfig.service}.${answers.package}.lzcapp:${httpConfig.port}/`
+                            target: `${routeTypeAnswer.type}://${httpConfig.service}.${answers.package}.lzcapp:${httpConfig.port}/`
                         }
                     });
                 }
@@ -416,21 +531,29 @@ async function convertApp(options = {}) {
                         { name: '输入镜像名', value: 'inputImage' },
                         { name: '自动构建并推送镜像', value: 'autoBuild' }
                     ],
-                    default: 'inputImage'
+                    default: cache[`${name}_image_action`] || 'inputImage'
                 }]);
 
                 if (imageActionAnswer.action === 'inputImage') {
                     const imageNameAnswer = await inquirer.prompt([{
                         type: 'input',
                         name: 'imageName',
-                        message: `请输入服务 ${name} 的镜像名：`
+                        message: `请输入服务 ${name} 的镜像名：`,
+                        default: cache[`${name}_image_name`] || undefined
                     }]);
                     service.image = imageNameAnswer.imageName;
+                    
+                    // 使用辅助函数更新缓存
+                    cache = await updateCache(cache, {
+                        [`${name}_image_action`]: 'inputImage',
+                        [`${name}_image_name`]: imageNameAnswer.imageName
+                    });
                 } else if (imageActionAnswer.action === 'autoBuild') {
                     const buildImageNameAnswer = await inquirer.prompt([{
                         type: 'input',
                         name: 'buildImageName',
-                        message: `请输入服务 ${name} 的构建镜像名：`
+                        message: `请输入服务 ${name} 的构建镜像名：`,
+                        default: cache[`${name}_build_image_name`] || undefined
                     }]);
 
                     // 假设 buildContext 是服务的构建上下文路径
@@ -442,12 +565,18 @@ async function convertApp(options = {}) {
                     console.log(`正在构建镜像：${buildCommand}`);
                     require('child_process').execSync(buildCommand, { stdio: 'inherit' });
 
-                    // 执行 Docker 推送命令
+                    // 执行 Docker 送命令
                     const pushCommand = `docker push ${buildImageNameAnswer.buildImageName}`;
                     console.log(`正在推送镜像：${pushCommand}`);
                     require('child_process').execSync(pushCommand, { stdio: 'inherit' });
 
                     service.image = buildImageNameAnswer.buildImageName;
+                    
+                    // 使用辅助函数更新缓存
+                    cache = await updateCache(cache, {
+                        [`${name}_image_action`]: 'autoBuild',
+                        [`${name}_build_image_name`]: buildImageNameAnswer.buildImageName
+                    });
                 }
             }
 
@@ -502,14 +631,19 @@ async function convertApp(options = {}) {
                         choices.unshift({ name: '使用目录内容', value: 'useContent' });
                     }
 
-                    // 询问用户如何处理挂载
+                    // 询问用户如何处理挂载，使用缓存的选择作为默认值
                     const volumeActionAnswer = await inquirer.prompt([{
                         type: 'list',
                         name: 'action',
                         message: `如何处理目录 ${sourcePath} 的挂载？`,
                         choices: choices,
-                        default: directoryExists ? 'useContent' : 'emptyDir'
+                        default: cache[`${name}_volume_${sourcePath}_action`] || (directoryExists ? 'useContent' : 'emptyDir')
                     }]);
+
+                    // 使用辅助函数更新缓存
+                    cache = await updateCache(cache, {
+                        [`${name}_volume_${sourcePath}_action`]: volumeActionAnswer.action
+                    });
 
                     if (volumeActionAnswer.action === 'useContent') {
                         if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
