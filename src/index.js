@@ -101,7 +101,7 @@ async function convertApp(options = {}) {
             questions.push({
                 type: 'confirm',
                 name: 'background_task',
-                message: '是否开机自启？',
+                message: '是否开机自启，后台运行？',
                 default: cache.background_task || undefined
             });
         }
@@ -109,7 +109,7 @@ async function convertApp(options = {}) {
             questions.push({
                 type: 'confirm',
                 name: 'multi_instance',
-                message: '是否多用户共享？',
+                message: '是否每个用户创建一个实例？',
                 default: cache.multi_instance || undefined
             });
         }
@@ -224,7 +224,7 @@ async function convertApp(options = {}) {
         cache = await updateCache(cache, { composePath });
     }
 
-    // 验证选择的文件
+    // 验证选择的
     try {
         const composeContent = await fs.readFile(composePath, 'utf8');
         const composeData = YAML.parse(composeContent);
@@ -385,7 +385,7 @@ async function convertApp(options = {}) {
                             validate: (input) => {
                                 const port = parseInt(input);
                                 if (isNaN(port) || port < 1 || port > 65535) {
-                                    return '请输入���效的端口号（1-65535）';
+                                    return '请输入有效的端口号（1-65535）';
                                 }
                                 return true;
                             }
@@ -487,7 +487,7 @@ async function convertApp(options = {}) {
             manifest.application.routes = httpRoutes;
         }
 
-        // 添加端口暴露配置
+        // 添加端口露配置
         const ingressRoutes = routes.filter(r => r.type === 'ingress');
         if (ingressRoutes.length > 0) {
             manifest.application.ingress = ingressRoutes.map(r => ({
@@ -584,7 +584,7 @@ async function convertApp(options = {}) {
                 image: service.image
             };
 
-            // 处理 environment
+            // 修改 environment 处理部分
             if (service.env_file) {
                 // Load environment variables from specified env_file
                 const envFilePath = path.resolve(executionDir, service.env_file);
@@ -594,24 +594,29 @@ async function convertApp(options = {}) {
                 );
             } else if (service.environment) {
                 // Handle inline environment variables
-                manifest.services[name].environment = [];
-
-                for (const [key, value] of Object.entries(service.environment)) {
-                    if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
-                        // Extract the variable name from ${VAR_NAME}
-                        const envVarName = value.slice(2, -1);
-                        // Replace with the value from the .env file or process.env
-                        const envValue = envConfig[envVarName] || process.env[envVarName] || '';
-                        manifest.services[name].environment.push(`${key}=${envValue}`);
-                    } else {
-                        manifest.services[name].environment.push(`${key}=${value}`);
+                if (Array.isArray(service.environment)) {
+                    // 如果是数组格式，直接使用
+                    manifest.services[name].environment = service.environment;
+                } else {
+                    // 如果是对象格式，转换为数组
+                    manifest.services[name].environment = [];
+                    for (const [key, value] of Object.entries(service.environment)) {
+                        if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+                            // Extract the variable name from ${VAR_NAME}
+                            const envVarName = value.slice(2, -1);
+                            // Replace with the value from the .env file or process.env
+                            const envValue = envConfig[envVarName] || process.env[envVarName] || '';
+                            manifest.services[name].environment.push(`${key}=${envValue}`);
+                        } else {
+                            manifest.services[name].environment.push(`${key}=${value}`);
+                        }
                     }
                 }
             }
 
-            // 处理 volumes
+            // 修改 volumes 处理部分
             if (service.volumes) {
-                manifest.services[name].volumes = [];
+                manifest.services[name].binds = [];
                 
                 for (const volume of service.volumes) {
                     const parts = volume.split(':');
@@ -631,7 +636,7 @@ async function convertApp(options = {}) {
                         choices.unshift({ name: '使用目录内容', value: 'useContent' });
                     }
 
-                    // 询问用户如何处理挂载，使用缓存的选择作为默认值
+                    // 询问用户如何处理挂载
                     const volumeActionAnswer = await inquirer.prompt([{
                         type: 'list',
                         name: 'action',
@@ -648,26 +653,19 @@ async function convertApp(options = {}) {
                     if (volumeActionAnswer.action === 'useContent') {
                         if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
                             // 命名卷，使用 /lzcapp/var/data
-                            manifest.services[name].volumes.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
+                            manifest.services[name].binds.push(`/lzcapp/var/${sourcePath}:${targetPath}`);
                             continue;
                         }
 
                         // 对于相对路径或绝对路径，都使用 /lzcapp/pkg/content 中的内容
                         const relativePath = path.relative(executionDir, absoluteSourcePath);
-                        manifest.services[name].volumes.push(`/lzcapp/pkg/content/${relativePath}:${targetPath}`);
+                        manifest.services[name].binds.push(`/lzcapp/pkg/content/${relativePath}:${targetPath}`);
                     } else if (volumeActionAnswer.action === 'emptyDir') {
                         // 挂载空目录
-                        manifest.services[name].volumes.push(`/lzcapp/var/data/${path.basename(sourcePath)}:${targetPath}`);
+                        manifest.services[name].binds.push(`/lzcapp/var/${path.basename(sourcePath)}:${targetPath}`);
                     }
                     // If the action is 'ignore', do nothing
                 }
-            }
-
-            if (service.binds) {
-                manifest.services[name].binds = service.binds.map(bind => {
-                    const [src, dest] = bind.split(':');
-                    return `/lzcapp/var/${path.basename(src)}:${dest}`;
-                });
             }
 
             if (service.command) {
