@@ -381,22 +381,35 @@ async function convertApp(options = {}) {
                                             default: cache[cacheKey]?.[mappingKey]?.path || '/'
                                         }]);
 
+                                        // 询问目标路径
+                                        const targetPathAnswer = await inquirer.prompt([{
+                                            type: 'input',
+                                            name: 'targetPath',
+                                            message: '请输入目标路径（如 / 或 /api/）：',
+                                            default: cache[cacheKey]?.[mappingKey]?.targetPath || '/'
+                                        }]);
+
                                         // 使用更新后的缓存结构
                                         cache = await updateCache(cache, {
                                             [cacheKey]: {
                                                 [mappingKey]: {
                                                     use: usePortAnswer.use === true,
                                                     type: routeTypeForPort.type,
-                                                    path: pathAnswer.path
+                                                    path: pathAnswer.path,
+                                                    targetPath: targetPathAnswer.targetPath
                                                 }
                                             }
                                         });
+
+                                        // 构建目标 URL，确保路径正确拼接
+                                        const targetPath = targetPathAnswer.targetPath.startsWith('/') ? targetPathAnswer.targetPath : '/' + targetPathAnswer.targetPath;
+                                        const target = `${routeTypeForPort.type}://${serviceName}.${answers.package}.lzcapp:${containerPort}${targetPath}`;
 
                                         routes.push({
                                             type: 'http',
                                             config: {
                                                 path: pathAnswer.path,
-                                                target: `${routeTypeForPort.type}://${serviceName}.${answers.package}.lzcapp:${containerPort}/`
+                                                target: target
                                             }
                                         });
                                     }
@@ -488,6 +501,12 @@ async function convertApp(options = {}) {
                                 }
                                 return true;
                             }
+                        },
+                        {
+                            type: 'input',
+                            name: 'targetPath',
+                            message: '请输入目标路径（如 / 或 /api/）：',
+                            default: cache.lastHttpTargetPath || '/'
                         }
                     ]);
 
@@ -495,15 +514,20 @@ async function convertApp(options = {}) {
                     cache = await updateCache(cache, {
                         lastHttpPath: httpConfig.path,
                         lastHttpService: httpConfig.service,
-                        lastHttpPort: httpConfig.port
+                        lastHttpPort: httpConfig.port,
+                        lastHttpTargetPath: httpConfig.targetPath
                     });
+
+                    // 构建目标 URL，确保路径正确拼接
+                    const targetPath = httpConfig.targetPath.startsWith('/') ? httpConfig.targetPath : '/' + httpConfig.targetPath;
+                    const target = `${routeTypeAnswer.type}://${httpConfig.service}.${answers.package}.lzcapp:${httpConfig.port}${targetPath}`;
 
                     // 添加 HTTP/HTTPS 路由
                     routes.push({
                         type: 'http',
                         config: {
                             path: httpConfig.path,
-                            target: `${routeTypeAnswer.type}://${httpConfig.service}.${answers.package}.lzcapp:${httpConfig.port}/`
+                            target: target
                         }
                     });
                 }
@@ -772,7 +796,7 @@ async function convertApp(options = {}) {
         // 写入 manifest.yml
         await fs.writeFile('manifest.yml', YAML.stringify(manifest));
 
-        // 复制图标文件，如果源文件和目标文件不同才复制
+        // 复制图标文件，如果源文件和目标文件不同才制
         const iconDestPath = path.join(process.cwd(), 'icon.png');
         if (path.resolve(iconPath) !== path.resolve(iconDestPath)) {
             await fs.copy(iconPath, iconDestPath);
