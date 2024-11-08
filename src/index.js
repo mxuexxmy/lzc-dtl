@@ -50,12 +50,27 @@ async function saveCache(cache) {
     }
 }
 
-// 在文件开头添加这个辅助函数
+// 修改 updateCache 函数
 async function updateCache(cache, updates) {
     const newCache = {
-        ...cache,
-        ...updates
+        ...cache
     };
+    
+    // 递归合并对象，确保布尔值正确处理
+    for (const [key, value] of Object.entries(updates)) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            newCache[key] = {
+                ...(newCache[key] || {}),
+                ...value
+            };
+        } else if (typeof value === 'boolean') {
+            // 确保布尔值被正确保存
+            newCache[key] = value;
+        } else {
+            newCache[key] = value;
+        }
+    }
+    
     await saveCache(newCache);
     return newCache;
 }
@@ -117,7 +132,7 @@ async function convertApp(options = {}) {
                 type: 'confirm',
                 name: 'background_task',
                 message: '是否开机自启，后台运行？',
-                default: cache.background_task || undefined
+                default: cache.background_task === undefined ? true : cache.background_task
             });
         }
         if (options.multiInstance === undefined || options.multiInstance === null) {
@@ -125,7 +140,7 @@ async function convertApp(options = {}) {
                 type: 'confirm',
                 name: 'multi_instance',
                 message: '是否每个用户创建一个实例？',
-                default: cache.multi_instance || undefined
+                default: cache.multi_instance === undefined ? false : cache.multi_instance
             });
         }
         if (!options.publicPaths) {
@@ -161,15 +176,15 @@ async function convertApp(options = {}) {
             public_paths: options.publicPaths || promptAnswers.public_paths
         };
 
-        // 使用辅助函数更新缓存
+        // 使用辅助函数更新缓存，确保布尔值正确保存
         cache = await updateCache(cache, {
             name: answers.name,
             package: answers.package,
             description: answers.description,
             homepage: answers.homepage,
             author: answers.author,
-            background_task: answers.background_task,
-            multi_instance: answers.multi_instance,
+            background_task: answers.background_task === true,  // 确保保存为布尔值
+            multi_instance: answers.multi_instance === true,    // 确保保存为布尔值
             public_paths: answers.public_paths,
             subdomain: answers.subdomain
         });
@@ -302,18 +317,17 @@ async function convertApp(options = {}) {
                             for (const portMapping of service.ports) {
                                 const [hostPort, containerPort] = portMapping.split(':');
                                 
-                                // 询问是否要添加这个端口映射
+                                // 生成一个更有结构的缓存键
+                                const cacheKey = `port_mappings`;
+                                const mappingKey = `${serviceName}_${portMapping}`;
+                                
+                                // 确保布尔值默认值正确处理
                                 const usePortAnswer = await inquirer.prompt([{
                                     type: 'confirm',
                                     name: 'use',
                                     message: `是否添加服务 ${serviceName} 的端口映射 ${portMapping}？`,
-                                    default: cache[`${serviceName}_port_${portMapping}_use`] || true
+                                    default: cache[cacheKey]?.[mappingKey]?.use === undefined ? true : cache[cacheKey]?.[mappingKey]?.use
                                 }]);
-
-                                // 使用辅助函数更新缓存
-                                cache = await updateCache(cache, {
-                                    [`${serviceName}_port_${portMapping}_use`]: usePortAnswer.use
-                                });
 
                                 if (usePortAnswer.use) {
                                     // 询问路由类型
@@ -326,13 +340,8 @@ async function convertApp(options = {}) {
                                             { name: 'HTTPS路由', value: 'https' },
                                             { name: 'TCP/UDP端口暴露', value: 'port' }
                                         ],
-                                        default: cache[`${serviceName}_port_${portMapping}_type`] || 'http'
+                                        default: cache[cacheKey]?.[mappingKey]?.type || 'http'
                                     }]);
-
-                                    // 使用辅助函数更新缓存
-                                    cache = await updateCache(cache, {
-                                        [`${serviceName}_port_${portMapping}_type`]: routeTypeForPort.type
-                                    });
 
                                     if (routeTypeForPort.type === 'port') {
                                         // 询问协议类型
@@ -341,12 +350,18 @@ async function convertApp(options = {}) {
                                             name: 'protocol',
                                             message: '请选择协议：',
                                             choices: ['tcp', 'udp'],
-                                            default: cache[`${serviceName}_port_${portMapping}_protocol`] || 'tcp'
+                                            default: cache[cacheKey]?.[mappingKey]?.protocol || 'tcp'
                                         }]);
 
-                                        // 使用辅助函数更新缓存
+                                        // 使用更新后的缓存结构
                                         cache = await updateCache(cache, {
-                                            [`${serviceName}_port_${portMapping}_protocol`]: protocolAnswer.protocol
+                                            [cacheKey]: {
+                                                [mappingKey]: {
+                                                    use: usePortAnswer.use === true,
+                                                    type: routeTypeForPort.type,
+                                                    protocol: protocolAnswer.protocol
+                                                }
+                                            }
                                         });
 
                                         routes.push({
@@ -363,12 +378,18 @@ async function convertApp(options = {}) {
                                             type: 'input',
                                             name: 'path',
                                             message: '请输入路由路径（如 /api/）：',
-                                            default: cache[`${serviceName}_port_${portMapping}_path`] || '/'
+                                            default: cache[cacheKey]?.[mappingKey]?.path || '/'
                                         }]);
 
-                                        // 使用辅助函数更新缓存
+                                        // 使用更新后的缓存结构
                                         cache = await updateCache(cache, {
-                                            [`${serviceName}_port_${portMapping}_path`]: pathAnswer.path
+                                            [cacheKey]: {
+                                                [mappingKey]: {
+                                                    use: usePortAnswer.use === true,
+                                                    type: routeTypeForPort.type,
+                                                    path: pathAnswer.path
+                                                }
+                                            }
                                         });
 
                                         routes.push({
@@ -379,6 +400,15 @@ async function convertApp(options = {}) {
                                             }
                                         });
                                     }
+                                } else {
+                                    // 保存不使用的选择
+                                    cache = await updateCache(cache, {
+                                        [cacheKey]: {
+                                            [mappingKey]: {
+                                                use: false
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -634,9 +664,53 @@ async function convertApp(options = {}) {
                 manifest.services[name].binds = [];
                 
                 for (const volume of service.volumes) {
-                    const parts = volume.split(':');
-                    const sourcePath = parts[0];
-                    const targetPath = parts[1];
+                    // 移除注释部分
+                    const volumeConfig = volume.split('#')[0].trim();
+                    
+                    // 如果移除注释后为空，跳过这个配置
+                    if (!volumeConfig) continue;
+                    
+                    // 解析 volume 配置
+                    const parts = volumeConfig.split(':');
+                    
+                    // 如果只有一个部分，说明是匿名卷
+                    if (parts.length === 1) {
+                        const targetPath = parts[0].trim();
+                        const volumeName = path.basename(targetPath);
+                        
+                        // 为匿名卷创建缓存键
+                        const volumeCacheKey = `volume_${name}_anonymous_${volumeName}`;
+                        
+                        // 询问用户如何处理匿名卷
+                        const volumeActionAnswer = await inquirer.prompt([{
+                            type: 'list',
+                            name: 'action',
+                            message: `如何处理匿名卷 ${targetPath}？`,
+                            choices: [
+                                { name: '挂载空目录', value: 'emptyDir' },
+                                { name: '忽略挂载', value: 'ignore' }
+                            ],
+                            default: cache[volumeCacheKey]?.action || 'emptyDir'
+                        }]);
+
+                        // 保存选择到缓存
+                        cache = await updateCache(cache, {
+                            [volumeCacheKey]: {
+                                action: volumeActionAnswer.action,
+                                timestamp: Date.now()
+                            }
+                        });
+
+                        if (volumeActionAnswer.action === 'emptyDir') {
+                            manifest.services[name].binds.push(`/lzcapp/var/data/${volumeName}:${targetPath}`);
+                        }
+                        // 如果选择 ignore，则不添加这个挂载
+                        continue;
+                    }
+                    
+                    // 处理常规卷挂载
+                    const sourcePath = parts[0].trim();
+                    const targetPath = parts[1].trim();
                     
                     // 检查目录是否存在
                     const absoluteSourcePath = path.resolve(executionDir, sourcePath);
@@ -651,18 +725,21 @@ async function convertApp(options = {}) {
                         choices.unshift({ name: '使用目录内容', value: 'useContent' });
                     }
 
-                    // 询问用户如何处理挂载
+                    const volumeCacheKey = `volume_${name}_${sourcePath}`;
                     const volumeActionAnswer = await inquirer.prompt([{
                         type: 'list',
                         name: 'action',
                         message: `如何处理目录 ${sourcePath} 的挂载？`,
                         choices: choices,
-                        default: cache[`${name}_volume_${sourcePath}_action`] || (directoryExists ? 'useContent' : 'emptyDir')
+                        default: cache[volumeCacheKey]?.action || (directoryExists ? 'useContent' : 'emptyDir')
                     }]);
 
-                    // 使用辅助函数更新缓存
+                    // 使用独立的缓存键保存 volume 选择
                     cache = await updateCache(cache, {
-                        [`${name}_volume_${sourcePath}_action`]: volumeActionAnswer.action
+                        [volumeCacheKey]: {
+                            action: volumeActionAnswer.action,
+                            timestamp: Date.now()  // 添加时间戳以跟踪最后修改时间
+                        }
                     });
 
                     if (volumeActionAnswer.action === 'useContent') {
