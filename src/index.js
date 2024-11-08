@@ -6,6 +6,17 @@ const archiver = require('archiver');
 const tar = require('tar');
 const dotenv = require('dotenv');
 
+const ASCII_LOGO = `
+$$\\                                   $$\\   $$\\     $$\\ 
+$$ |                                  $$ |  $$ |    $$ |
+$$ |$$$$$$$$\\  $$$$$$$\\          $$$$$$$ |$$$$$$\\   $$ |
+$$ |\\____$$  |$$  _____|$$$$$$\\ $$  __$$ |\\_$$  _|  $$ |
+$$ |  $$$$ _/ $$ /      \\______|$$ /  $$ |  $$ |    $$ |
+$$ | $$  _/   $$ |              $$ |  $$ |  $$ |$$\\ $$ |
+$$ |$$$$$$$$\\ \\$$$$$$$\\         \\$$$$$$$ |  \\$$$$  |$$ |
+\\__|\\________| \\_______|         \\_______|   \\____/ \\__|
+`;
+
 // 新增：获取目录下的文件列表
 async function getFilesList(extensions) {
     const files = await fs.readdir(process.cwd());
@@ -50,6 +61,10 @@ async function updateCache(cache, updates) {
 }
 
 async function convertApp(options = {}) {
+    console.log(ASCII_LOGO);
+    console.log('欢迎使用懒猫微服应用转换器');
+    console.log('这个转换器可以把 docker-compose.yml 方便地转换为 懒猫微服 lpk 应用包。\n');
+
     let answers;
     let cache = await loadCache();
     
@@ -702,7 +717,7 @@ async function convertApp(options = {}) {
         // 清理临时文件
         await fs.remove('content.tar');
 
-        console.log('转换完成！');
+        console.log(`\n转换完成！已生成应用包：${answers.package}.lpk`);
     } catch (error) {
         // 确保清理临时文件
         try {
