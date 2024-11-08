@@ -263,7 +263,7 @@ async function convertApp(options = {}) {
     } else {
         // 使用命令行参数时，确保这两个值有效
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
-            throw new Error('在非交互模式下必须指定 --background-task 选项');
+            throw new Error('在交互模式下必须指定 --background-task 选项');
         }
         if (options.multiInstance === undefined || options.multiInstance === null) {
             throw new Error('在非交互模式下必须指定 --multi-instance 选项');
@@ -721,7 +721,7 @@ async function convertApp(options = {}) {
                     console.log(`正在构建镜像：${buildCommand}`);
                     require('child_process').execSync(buildCommand, { stdio: 'inherit' });
 
-                    // 执行 Docker 送命令
+                    // 执行 Docker 推送命令
                     const pushCommand = `docker push ${buildImageNameAnswer.buildImageName}`;
                     console.log(`正在推送镜像：${pushCommand}`);
                     require('child_process').execSync(pushCommand, { stdio: 'inherit' });
@@ -788,27 +788,116 @@ async function convertApp(options = {}) {
                     if (typeof volumeConfig === 'object') {
                         targetPath = volumeConfig.target;
                     } else {
-                        // 处理命名卷和匿名卷
-                        const volumeParts = volumeConfig.split(':');
-                        if (volumeParts.length === 1) {
-                            // 匿名卷处理...（保持原有代码）
-                        } else {
-                            sourcePath = volumeParts[0];
-                            targetPath = volumeParts[1];
-
-                            // 检查是否是命名卷（不以 ./ ../ / 或 ~ 开头的路径）
-                            if (!sourcePath.startsWith('./') && !sourcePath.startsWith('../') && 
-                                !sourcePath.startsWith('/') && !sourcePath.startsWith('~')) {
-                                // 这是一个命名卷，直接使用 /lzcapp/var/data 目录
-                                manifest.services[name].binds.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
-                                continue;
+                        // 先处理环境变量和默认值
+                        let processedVolume = volumeConfig;
+                        if (processedVolume.includes('${')) {
+                            const envMatches = processedVolume.match(/\${[^}]+}/g);
+                            if (envMatches) {
+                                for (const match of envMatches) {
+                                    const envExpression = match.slice(2, -1);
+                                    let envName, defaultValue;
+                                    
+                                    if (envExpression.includes(':-')) {
+                                        [envName, defaultValue] = envExpression.split(':-');
+                                    } else {
+                                        envName = envExpression;
+                                    }
+                                    
+                                    // 获取环境变量值或使用默认值
+                                    const envValue = envConfig[envName] || process.env[envName] || defaultValue || '';
+                                    processedVolume = processedVolume.replace(match, envValue);
+                                }
                             }
                         }
 
-                        // 处理环境变量...（保持原有代码）
-                    }
+                        // 分割源路径和目标路径
+                        const volumeParts = processedVolume.split(':');
+                        if (volumeParts.length === 1) {
+                            // 处理匿名卷
+                            targetPath = volumeParts[0].trim();
+                            const volumeName = path.basename(targetPath);
+                            
+                            // 询问用户如何处理匿名卷
+                            const volumeActionAnswer = await inquirer.prompt([{
+                                type: 'list',
+                                name: 'action',
+                                message: `如何处理匿名卷 ${targetPath}？`,
+                                choices: [
+                                    { name: '挂载空目录', value: 'emptyDir' },
+                                    { name: '忽略挂载', value: 'ignore' }
+                                ],
+                                default: cache[`${name}_volume_${targetPath}_action`] || 'emptyDir'
+                            }]);
 
-                    // 其余的处理逻辑保持不变...
+                            // 更新缓存
+                            cache = await updateCache(cache, {
+                                [`${name}_volume_${targetPath}_action`]: volumeActionAnswer.action
+                            });
+
+                            if (volumeActionAnswer.action === 'emptyDir') {
+                                manifest.services[name].binds.push(`/lzcapp/var/data/${volumeName}:${targetPath}`);
+                            }
+                            continue;
+                        }
+
+                        sourcePath = volumeParts[0];
+                        targetPath = volumeParts[1];
+
+                        // 检查是否是命名卷
+                        const isNamedVolume = sourcePath && !sourcePath.startsWith('./') && !sourcePath.startsWith('../') && 
+                            !sourcePath.startsWith('/') && !sourcePath.startsWith('~') && !path.isAbsolute(sourcePath);
+
+                        if (isNamedVolume) {
+                            // 命名卷直接使用 /lzcapp/var/data 目录
+                            manifest.services[name].binds.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
+                            continue;
+                        }
+
+                        // 处理源路径中的波浪号
+                        if (sourcePath && sourcePath.startsWith('~')) {
+                            sourcePath = sourcePath.replace('~', process.env.HOME || process.env.USERPROFILE);
+                        }
+
+                        // 检查目录是否存在
+                        let choices = [
+                            { name: '挂载空目录', value: 'emptyDir' },
+                            { name: '忽略挂载', value: 'ignore' }
+                        ];
+
+                        let absoluteSourcePath;
+                        if (sourcePath) {
+                            absoluteSourcePath = path.resolve(executionDir, sourcePath);
+                            const directoryExists = await fs.pathExists(absoluteSourcePath);
+                            if (directoryExists) {
+                                choices.unshift({ name: '使用目录内容', value: 'useContent' });
+                            }
+                        }
+
+                        // 询问用户如何处理挂载
+                        const volumeActionAnswer = await inquirer.prompt([{
+                            type: 'list',
+                            name: 'action',
+                            message: `如何处理挂载点 ${targetPath}？`,
+                            choices: choices,
+                            default: cache[`${name}_volume_${targetPath}_action`] || (sourcePath ? 'useContent' : 'emptyDir')
+                        }]);
+
+                        // 更新缓存
+                        cache = await updateCache(cache, {
+                            [`${name}_volume_${targetPath}_action`]: volumeActionAnswer.action
+                        });
+
+                        if (volumeActionAnswer.action === 'useContent' && sourcePath) {
+                            // 对于相对路径或绝对路径，使用 /lzcapp/pkg/content 中的内容
+                            const relativePath = path.relative(executionDir, absoluteSourcePath);
+                            // 使用 posix 风格的路径
+                            const posixPath = relativePath.split(path.sep).join(path.posix.sep);
+                            manifest.services[name].binds.push(`/lzcapp/pkg/content/${posixPath}:${targetPath}`);
+                        } else if (volumeActionAnswer.action === 'emptyDir') {
+                            // 挂载空目录，使用目标路径的基础名称
+                            manifest.services[name].binds.push(`/lzcapp/var/${path.basename(targetPath)}:${targetPath}`);
+                        }
+                    }
                 }
             }
  
@@ -824,7 +913,7 @@ async function convertApp(options = {}) {
         // 写入 manifest.yml
         await fs.writeFile('manifest.yml', YAML.stringify(manifest));
 
-        // 复制图标文件，如果源文件和目标文件不同才制
+        // 复制图标文件，如果源文件和目标文件不同才复制
         const iconDestPath = path.join(process.cwd(), 'icon.png');
         if (path.resolve(iconPath) !== path.resolve(iconDestPath)) {
             await fs.copy(iconPath, iconDestPath);
