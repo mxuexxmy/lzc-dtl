@@ -68,18 +68,21 @@ async function convertApp(options = {}) {
     let answers;
     let cache = await loadCache();
     
-    // 如果没有通过命令行参数提供完整信息，则通过交互式提示收集
+    // 在收集功能选项之前，先收集基本信息
     if (!options.nonInteractive) {
         const questions = [];
         
+        // 基本信息设置
         if (!options.name) {
             questions.push({
                 type: 'input',
                 name: 'name',
                 message: '请输入应用名称：',
-                default: cache.name || undefined
+                default: cache.name || undefined,
+                validate: input => input.trim() ? true : '应用名称不能为空'
             });
         }
+
         if (!options.package) {
             questions.push({
                 type: 'input',
@@ -88,6 +91,7 @@ async function convertApp(options = {}) {
                 default: cache.package || undefined
             });
         }
+
         if (!options.description) {
             questions.push({
                 type: 'input',
@@ -96,6 +100,7 @@ async function convertApp(options = {}) {
                 default: cache.description || undefined
             });
         }
+
         if (!options.homepage) {
             questions.push({
                 type: 'input',
@@ -104,6 +109,7 @@ async function convertApp(options = {}) {
                 default: cache.homepage || undefined
             });
         }
+
         if (!options.author) {
             questions.push({
                 type: 'input',
@@ -112,67 +118,123 @@ async function convertApp(options = {}) {
                 default: cache.author || undefined
             });
         }
-        if (options.backgroundTask === undefined || options.backgroundTask === null) {
-            questions.push({
-                type: 'confirm',
-                name: 'background_task',
-                message: '是否开机自启，后台运行？',
-                default: cache.background_task || undefined
-            });
-        }
-        if (options.multiInstance === undefined || options.multiInstance === null) {
-            questions.push({
-                type: 'confirm',
-                name: 'multi_instance',
-                message: '是否每个用户创建一个实例？',
-                default: cache.multi_instance || undefined
-            });
-        }
-        if (!options.publicPaths) {
-            questions.push({
-                type: 'input',
-                name: 'public_paths',
-                message: '需要对外暴露的页面（用逗号分隔）：',
-                default: cache.public_paths || '/',
-                validate: (input) => {
-                    const paths = input.split(',');
-                    if (paths.length === 0) {
-                        return '请输入有效的页面路径（用逗号分隔）';
-                    }
-                    return true;
-                }
-            });
-        }
-        if (!options.subdomain) {
-            questions.push({
-                type: 'input',
-                name: 'subdomain',
-                message: '请输入子域名：',
-                default: cache.subdomain || undefined
-            });
-        }
+
+        // 添加功能选择
+        questions.push({
+            type: 'checkbox',
+            name: 'app_features',
+            message: '请选择应用功能：',
+            choices: [
+                { name: '开机自启，后台运行', value: 'background_task', checked: cache.app_features?.includes('background_task') },
+                { name: '每个用户创建一个实例', value: 'multi_instance', checked: cache.app_features?.includes('multi_instance') },
+                { name: '公开路由 (无需登录即可访问)', value: 'public_path', checked: cache.app_features?.includes('public_path') },
+                { name: 'GPU加速', value: 'gpu_accel', checked: cache.app_features?.includes('gpu_accel') },
+                { name: '文件关联 (可以打开特定类型文件)', value: 'file_handler', checked: cache.app_features?.includes('file_handler') }
+            ]
+        });
 
         const promptAnswers = await inquirer.prompt(questions);
-        answers = {
-            ...options,
-            ...promptAnswers,
-            background_task: options.backgroundTask !== undefined ? options.backgroundTask : promptAnswers.background_task,
-            multi_instance: options.multiInstance !== undefined ? options.multiInstance : promptAnswers.multi_instance,
-            public_paths: options.publicPaths || promptAnswers.public_paths
-        };
+        answers = { ...options, ...promptAnswers };
 
-        // 使用辅助函数更新缓存
+        // 更新基本信息和功能选择到缓存
         cache = await updateCache(cache, {
             name: answers.name,
             package: answers.package,
             description: answers.description,
             homepage: answers.homepage,
             author: answers.author,
-            background_task: answers.background_task,
-            multi_instance: answers.multi_instance,
-            public_paths: answers.public_paths,
-            subdomain: answers.subdomain
+            app_features: answers.app_features
         });
+
+        // 根据选择的功能收集详细配置
+        if (answers.app_features?.length > 0) {
+            // 如果选择了公开路由，收集路由配置
+            if (answers.app_features.includes('public_path')) {
+                let publicPaths = [];
+                let addMorePaths = true;
+
+                while (addMorePaths) {
+                    const publicPathAnswer = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'path',
+                            message: '请输入需要公开访问的路径：',
+                            default: '/',
+                            validate: input => input.trim() ? true : '路径不能为空'
+                        },
+                        {
+                            type: 'confirm',
+                            name: 'addMore',
+                            message: '是否继续添加公开路径？',
+                            default: false
+                        }
+                    ]);
+
+                    publicPaths.push(publicPathAnswer.path);
+                    addMorePaths = publicPathAnswer.addMore;
+                }
+
+                answers.public_paths = publicPaths;
+                cache = await updateCache(cache, { public_paths: publicPaths });
+            }
+
+            // 如果选择了文件关联，收集文件关联配置
+            if (answers.app_features.includes('file_handler')) {
+                let mimeTypes = [];
+                let extensions = [];
+                let addMoreTypes = true;
+
+                while (addMoreTypes) {
+                    const fileHandlerAnswers = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'mime_type',
+                            message: '请输入支持的MIME类型（如 audio/mpeg）：',
+                            validate: input => input.trim() ? true : '请输入有效的MIME类型'
+                        },
+                        {
+                            type: 'input',
+                            name: 'extension',
+                            message: '请输入对应的文件扩展名（如 .mp3）：',
+                            validate: input => input.trim() ? true : '请输入有效的文件扩展名'
+                        },
+                        {
+                            type: 'confirm',
+                            name: 'addMore',
+                            message: '是否继续添加文件类型？',
+                            default: false
+                        }
+                    ]);
+
+                    mimeTypes.push(fileHandlerAnswers.mime_type.trim());
+                    extensions.push(fileHandlerAnswers.extension.trim());
+                    addMoreTypes = fileHandlerAnswers.addMore;
+                }
+
+                // 收集打开文件的路由路径
+                const openActionAnswer = await inquirer.prompt([{
+                    type: 'input',
+                    name: 'open_action',
+                    message: '请输入打开文件的路由路径（使用 %u 作为文件路径占位符）：',
+                    default: cache.open_action || '/open?file=%u',
+                    validate: input => input.includes('%u') ? true : '路径必须包含 %u 作为文件路径占位符'
+                }]);
+
+                answers.file_handler = {
+                    mime: mimeTypes,
+                    extensions: extensions,
+                    actions: { open: openActionAnswer.open_action }
+                };
+
+                cache = await updateCache(cache, {
+                    mime_types: mimeTypes,
+                    extensions: extensions,
+                    open_action: openActionAnswer.open_action
+                });
+            }
+        }
+
+        // 继续处理图标文件等其他配置...
     } else {
         // 使用命令行参数时，确保这两个值有效
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
@@ -190,7 +252,7 @@ async function convertApp(options = {}) {
             author: options.author,
             background_task: options.backgroundTask,
             multi_instance: options.multiInstance,
-            public_paths: options.publicPaths,
+            publicPaths: options.publicPaths,
             subdomain: options.subdomain
         };
     }
@@ -262,13 +324,28 @@ async function convertApp(options = {}) {
             homepage: answers.homepage,
             author: answers.author,
             application: {
-                background_task: answers.background_task,
-                multi_instance: answers.multi_instance,
-                public_path: answers.public_paths.split(','),
-                subdomain: answers.subdomain
+                subdomain: answers.subdomain,
+                background_task: answers.app_features?.includes('background_task') || false,
+                multi_instance: answers.app_features?.includes('multi_instance') || false,
+                gpu_accel: answers.app_features?.includes('gpu_accel') || false
             },
             services: {}
         };
+
+        // 添加公开路由配置
+        if (answers.public_paths) {
+            manifest.application.public_path = answers.public_paths;
+        }
+
+        // 添加GPU配置
+        if (answers.gpu_accel) {
+            manifest.application.gpu_accel = true;
+        }
+
+        // 添加文件关联配置
+        if (answers.file_handler) {
+            manifest.application.file_handler = answers.file_handler;
+        }
 
         // 处理路由规则
         let routes = [];
@@ -296,7 +373,7 @@ async function convertApp(options = {}) {
                 cache = await updateCache(cache, { lastRouteType: routeTypeAnswer.type });
 
                 if (routeTypeAnswer.type === 'from_compose') {
-                    // 从 docker-compose 读取端口
+                    // 从 docker-compose 读端口
                     for (const [serviceName, service] of Object.entries(composeData.services)) {
                         if (service.ports) {
                             for (const portMapping of service.ports) {
@@ -553,7 +630,7 @@ async function convertApp(options = {}) {
                     const imageNameAnswer = await inquirer.prompt([{
                         type: 'input',
                         name: 'imageName',
-                        message: `请输入服务 ${name} 的镜像名：`,
+                        message: `请输入务 ${name} 的镜像名：`,
                         default: cache[`${name}_image_name`] || undefined
                     }]);
                     service.image = imageNameAnswer.imageName;
@@ -634,55 +711,105 @@ async function convertApp(options = {}) {
                 manifest.services[name].binds = [];
                 
                 for (const volume of service.volumes) {
-                    const parts = volume.split(':');
-                    const sourcePath = parts[0];
-                    const targetPath = parts[1];
-                    
-                    // 检查目录是否存在
-                    const absoluteSourcePath = path.resolve(executionDir, sourcePath);
-                    const directoryExists = await fs.pathExists(absoluteSourcePath);
+                    let targetPath;
+                    let sourcePath;
 
+                    // 提取目标路径，不管是对象格式还是字符串格式
+                    if (typeof volume === 'object') {
+                        targetPath = volume.target;
+                    } else {
+                        // 先处理整个卷字符串中的环境变量
+                        let processedVolume = volume;
+                        if (processedVolume.includes('${')) {
+                            // 提取所有环境变量表达式
+                            const envMatches = processedVolume.match(/\${[^}]+}/g);
+                            if (envMatches) {
+                                for (const match of envMatches) {
+                                    const envExpression = match.slice(2, -1);
+                                    let envName, defaultValue;
+                                    
+                                    if (envExpression.includes(':-')) {
+                                        [envName, defaultValue] = envExpression.split(':-');
+                                    } else {
+                                        envName = envExpression;
+                                    }
+                                    
+                                    // 获取环境变量值
+                                    const envValue = envConfig[envName] || process.env[envName] || defaultValue || '';
+                                    processedVolume = processedVolume.replace(match, envValue);
+                                }
+                            }
+                        }
+
+                        // 现在处理处理好的卷字符串
+                        const parts = processedVolume.split(':');
+                        sourcePath = parts[0];
+                        targetPath = parts[1];
+                    }
+
+                    // 展开波浪号到用户主目录
+                    if (sourcePath && sourcePath.startsWith('~')) {
+                        sourcePath = sourcePath.replace('~', process.env.HOME || process.env.USERPROFILE);
+                    }
+
+                    // 检查目录是否存在
                     let choices = [
                         { name: '挂载空目录', value: 'emptyDir' },
                         { name: '忽略挂载', value: 'ignore' }
                     ];
 
-                    if (directoryExists) {
-                        choices.unshift({ name: '使用目录内容', value: 'useContent' });
+                    let absoluteSourcePath;
+                    if (sourcePath) {
+                        absoluteSourcePath = path.resolve(executionDir, sourcePath);
+                        const directoryExists = await fs.pathExists(absoluteSourcePath);
+                        if (directoryExists) {
+                            choices.unshift({ name: '使用目录内容', value: 'useContent' });
+                        }
                     }
 
                     // 询问用户如何处理挂载
                     const volumeActionAnswer = await inquirer.prompt([{
                         type: 'list',
                         name: 'action',
-                        message: `如何处理目录 ${sourcePath} 的挂载？`,
+                        message: `如何处理挂载点 ${targetPath}？`,
                         choices: choices,
-                        default: cache[`${name}_volume_${sourcePath}_action`] || (directoryExists ? 'useContent' : 'emptyDir')
+                        default: cache[`${name}_volume_${targetPath}_action`] || (sourcePath ? 'useContent' : 'emptyDir')
                     }]);
 
-                    // 使用辅助函数更新缓存
+                    // 更新缓存
                     cache = await updateCache(cache, {
-                        [`${name}_volume_${sourcePath}_action`]: volumeActionAnswer.action
+                        [`${name}_volume_${targetPath}_action`]: volumeActionAnswer.action
                     });
 
-                    if (volumeActionAnswer.action === 'useContent') {
+                    if (volumeActionAnswer.action === 'useContent' && sourcePath) {
                         if (!sourcePath.startsWith('/') && !sourcePath.startsWith('./') && !sourcePath.startsWith('../')) {
                             // 命名卷，使用 /lzcapp/var/data
                             manifest.services[name].binds.push(`/lzcapp/var/${sourcePath}:${targetPath}`);
-                            continue;
+                        } else {
+                            // 对于相对路径或绝对路径，都使用 /lzcapp/pkg/content 中的内容
+                            const relativePath = path.relative(executionDir, absoluteSourcePath);
+                            manifest.services[name].binds.push(`/lzcapp/pkg/content/${relativePath}:${targetPath}`);
                         }
-
-                        // 对于相对路径或绝对路径，都使用 /lzcapp/pkg/content 中的内容
-                        const relativePath = path.relative(executionDir, absoluteSourcePath);
-                        manifest.services[name].binds.push(`/lzcapp/pkg/content/${relativePath}:${targetPath}`);
                     } else if (volumeActionAnswer.action === 'emptyDir') {
                         // 挂载空目录
-                        manifest.services[name].binds.push(`/lzcapp/var/${path.basename(sourcePath)}:${targetPath}`);
+                        if (typeof volume === 'object' && volume.type === 'tmpfs') {
+                            // 如果是 tmpfs 类型，添加到 tmpfs 配置
+                            if (!manifest.services[name].tmpfs) {
+                                manifest.services[name].tmpfs = [];
+                            }
+                            manifest.services[name].tmpfs.push({
+                                target: targetPath,
+                                tmpfs: volume.tmpfs || {}
+                            });
+                        } else {
+                            // 普通空目录
+                            manifest.services[name].binds.push(`/lzcapp/var/${path.basename(targetPath)}:${targetPath}`);
+                        }
                     }
                     // If the action is 'ignore', do nothing
                 }
             }
-
+ 
             if (service.command) {
                 manifest.services[name].command = service.command;
             }
