@@ -214,7 +214,7 @@ async function convertApp(options = {}) {
                         {
                             type: 'input',
                             name: 'mime_type',
-                            message: '请输入支持的MIME类型（如 audio/mpeg）：',
+                            message: '请��入支持的MIME类型（如 audio/mpeg）：',
                             validate: input => input.trim() ? true : '请输入有效的MIME类型'
                         },
                         {
@@ -835,7 +835,9 @@ async function convertApp(options = {}) {
                             });
 
                             if (volumeActionAnswer.action === 'emptyDir') {
-                                manifest.services[name].binds.push(`/lzcapp/var/data/${volumeName}:${targetPath}`);
+                                const { bindMount, cache: newCache } = await promptMountLocation(name, targetPath, cache);
+                                manifest.services[name].binds.push(bindMount);
+                                cache = newCache;  // 更新缓存
                             }
                             continue;
                         }
@@ -894,8 +896,9 @@ async function convertApp(options = {}) {
                             const posixPath = relativePath.split(path.sep).join(path.posix.sep);
                             manifest.services[name].binds.push(`/lzcapp/pkg/content/${posixPath}:${targetPath}`);
                         } else if (volumeActionAnswer.action === 'emptyDir') {
-                            // 挂载空目录，使用目标路径的基础名称
-                            manifest.services[name].binds.push(`/lzcapp/var/${path.basename(targetPath)}:${targetPath}`);
+                            const { bindMount, cache: newCache } = await promptMountLocation(name, targetPath, cache);
+                            manifest.services[name].binds.push(bindMount);
+                            cache = newCache;  // 更新缓存
                         }
                     }
                 }
@@ -944,6 +947,58 @@ async function convertApp(options = {}) {
             console.error('清理临时文件失败:', cleanupError);
         }
         throw new Error(`处理文件时出错：${error.message}`);
+    }
+}
+
+// 将询问挂载位置的逻辑抽取成一个函数
+async function promptMountLocation(name, targetPath, cache) {
+    // 询问用户选择挂载位置
+    const mountLocationAnswer = await inquirer.prompt([{
+        type: 'list',
+        name: 'location',
+        message: `请选择 ${targetPath} 的挂载位置：`,
+        choices: [
+            { name: '应用内部数据目录 (/lzcapp/var)', value: 'app_data' },
+            { name: '用户文稿数据目录 (/lzcapp/run/mnt/home)', value: 'user_data' }
+        ],
+        default: cache[`${name}_volume_${targetPath}_location`] || 'app_data'
+    }]);
+
+    // 更新缓存并获取新的缓存对象
+    cache = await updateCache(cache, {
+        [`${name}_volume_${targetPath}_location`]: mountLocationAnswer.location
+    });
+
+    if (mountLocationAnswer.location === 'app_data') {
+        // 挂载到应用内部数据目录
+        return {
+            bindMount: `/lzcapp/var/${path.basename(targetPath)}:${targetPath}`,
+            cache
+        };
+    } else {
+        // 询问用户文稿数据目录的子目录名称
+        const subDirAnswer = await inquirer.prompt([{
+            type: 'input',
+            name: 'subdir',
+            message: '请输入用户文稿数据目录下的子目录名称：',
+            default: cache[`${name}_volume_${targetPath}_subdir`] || path.basename(targetPath),
+            validate: input => {
+                if (!input.trim()) return '子目录名称不能为空';
+                if (input.includes('/')) return '子目录名称不能包含斜杠';
+                return true;
+            }
+        }]);
+
+        // 更新缓存并获取新的缓存对象
+        cache = await updateCache(cache, {
+            [`${name}_volume_${targetPath}_subdir`]: subDirAnswer.subdir
+        });
+
+        // 挂载到用户文稿数据目录
+        return {
+            bindMount: `/lzcapp/run/mnt/home/${subDirAnswer.subdir}:${targetPath}`,
+            cache
+        };
     }
 }
 
