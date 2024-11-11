@@ -107,6 +107,23 @@ async function convertApp(options = {}) {
             });
         }
 
+        if (!options.version) {
+            questions.push({
+                type: 'input',
+                name: 'version',
+                message: '请输入应用版本：',
+                default: cache.version || '0.0.1',
+                validate: input => {
+                    // 使用简单的语义化版本格式验证
+                    const semverRegex = /^\d+\.\d+\.\d+$/;
+                    if (!semverRegex.test(input)) {
+                        return '请输入有效的版本号（例如：1.0.0）';
+                    }
+                    return true;
+                }
+            });
+        }
+
         if (!options.description) {
             questions.push({
                 type: 'input',
@@ -168,7 +185,8 @@ async function convertApp(options = {}) {
             homepage: answers.homepage,
             author: answers.author,
             app_features: answers.app_features,
-            subdomain: answers.subdomain
+            subdomain: answers.subdomain,
+            version: answers.version
         });
 
         // 根据选择的功能收集详细配置
@@ -344,7 +362,7 @@ async function convertApp(options = {}) {
             'lzc-sdk-version': '0.1',
             name: answers.name,
             package: answers.package,
-            version: '0.0.1',
+            version: answers.version || '0.0.1', // 使用用户输入的版本或默认值
             description: answers.description,
             homepage: answers.homepage,
             author: answers.author,
@@ -530,7 +548,7 @@ async function convertApp(options = {}) {
                             validate: (input) => {
                                 const port = parseInt(input);
                                 if (isNaN(port) || port < 1 || port > 65535) {
-                                    return '请输入有效的端��号（1-65535）';
+                                    return '请输入有效的端号（1-65535）';
                                 }
                                 return true;
                             }
