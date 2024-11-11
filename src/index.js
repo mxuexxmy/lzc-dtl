@@ -214,7 +214,7 @@ async function convertApp(options = {}) {
                         {
                             type: 'input',
                             name: 'mime_type',
-                            message: '请��入支持的MIME类型（如 audio/mpeg）：',
+                            message: '请输入支持的MIME类型（如 audio/mpeg）：',
                             validate: input => input.trim() ? true : '请输入有效的MIME类型'
                         },
                         {
@@ -530,7 +530,7 @@ async function convertApp(options = {}) {
                             validate: (input) => {
                                 const port = parseInt(input);
                                 if (isNaN(port) || port < 1 || port > 65535) {
-                                    return '请输入有效的端口号（1-65535）';
+                                    return '请输入有效的端��号（1-65535）';
                                 }
                                 return true;
                             }
