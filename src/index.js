@@ -277,7 +277,50 @@ async function convertApp(options = {}) {
             }
         }
 
-        // 继续处理图标文件等其他配置...
+        // 在收集完基本配置后，继续处理图标文件等其他配置
+        if (!options.nonInteractive) {
+            // 处理图标文件
+            if (!options.icon) {
+                const imageFiles = await getFilesList(['.png', '.jpg', '.jpeg', '.gif']);
+                if (imageFiles.length === 0) {
+                    throw new Error('当前目录下没有找到图片文件');
+                }
+
+                const iconAnswer = await inquirer.prompt([{
+                    type: 'list',
+                    name: 'iconPath',
+                    message: '请选择图标文件：',
+                    choices: imageFiles,
+                    pageSize: 10,
+                    default: cache.iconPath || undefined
+                }]);
+                options.icon = iconAnswer.iconPath;
+                
+                // 使用辅助函数更新缓存
+                cache = await updateCache(cache, { iconPath: options.icon });
+            }
+
+            // 处理 docker-compose.yml
+            if (!options.compose) {
+                const yamlFiles = await getFilesList(['.yml', '.yaml']);
+                if (yamlFiles.length === 0) {
+                    throw new Error('当前目录下没有找到 YAML 文件');
+                }
+
+                const composeAnswer = await inquirer.prompt([{
+                    type: 'list',
+                    name: 'composePath',
+                    message: '请选择 docker-compose 文件：',
+                    choices: yamlFiles,
+                    pageSize: 10,
+                    default: cache.composePath || undefined
+                }]);
+                options.compose = composeAnswer.composePath;
+                
+                // 使用辅助函数更新缓存
+                cache = await updateCache(cache, { composePath: options.compose });
+            }
+        }
     } else {
         // 使用命令行参数时，确保这两个值有效
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
@@ -300,53 +343,9 @@ async function convertApp(options = {}) {
         };
     }
 
-    // 处理图标文件
-    let iconPath = options.icon;
-    if (!iconPath) {
-        const imageFiles = await getFilesList(['.png', '.jpg', '.jpeg', '.gif']);
-        if (imageFiles.length === 0) {
-            throw new Error('当前目录下没有找到图片文件');
-        }
-
-        const iconAnswer = await inquirer.prompt([{
-            type: 'list',
-            name: 'iconPath',
-            message: '请选择图标文件：',
-            choices: imageFiles,
-            pageSize: 10,
-            default: cache.iconPath || undefined
-        }]);
-        iconPath = iconAnswer.iconPath;
-        
-        // 使用辅助函数更新缓存
-        cache = await updateCache(cache, { iconPath });
-    }
-
-    // 处理 docker-compose.yml
-    let composePath = options.compose;
-    if (!composePath) {
-        const yamlFiles = await getFilesList(['.yml', '.yaml']);
-        if (yamlFiles.length === 0) {
-            throw new Error('当前目录下没有找到 YAML 文件');
-        }
-
-        const composeAnswer = await inquirer.prompt([{
-            type: 'list',
-            name: 'composePath',
-            message: '请选择 docker-compose 文件：',
-            choices: yamlFiles,
-            pageSize: 10,
-            default: cache.composePath || undefined
-        }]);
-        composePath = composeAnswer.composePath;
-        
-        // 使用辅助函数更新缓存
-        cache = await updateCache(cache, { composePath });
-    }
-
     // 验证选择的
     try {
-        const composeContent = await fs.readFile(composePath, 'utf8');
+        const composeContent = await fs.readFile(options.compose, 'utf8');
         const composeData = YAML.parse(composeContent);
         
         // 验证是否是有效的 docker-compose 文件
@@ -506,7 +505,7 @@ async function convertApp(options = {}) {
                                             }
                                         });
 
-                                        // 构建目标 URL，确保路径正确拼接
+                                        // 构建标 URL，确保路径正确拼接
                                         const targetPath = targetPathAnswer.targetPath.startsWith('/') ? targetPathAnswer.targetPath : '/' + targetPathAnswer.targetPath;
                                         const target = `${routeTypeForPort.type}://${serviceName}.${answers.package}.lzcapp:${containerPort}${targetPath}`;
 
@@ -671,7 +670,7 @@ async function convertApp(options = {}) {
             }));
         }
 
-        // 在处理 services 的部分之前，直接在当前目录创建 content.tar
+        // 在处理 services 的部���之前，直接在当前目录创建 content.tar
         const executionDir = process.cwd(); // 获取 lzc-dtl 执行的目录
 
         // 创建 content.tar，包含当前目录下的所有文件和目录
@@ -693,110 +692,110 @@ async function convertApp(options = {}) {
         const envPath = path.join(process.cwd(), '.env');
         const envConfig = dotenv.config({ path: envPath }).parsed || {};
 
-        // 修改 services 处理逻辑
-        for (const [name, service] of Object.entries(composeData.services)) {
-            // 检查服务是否有 image
-            if (!service.image) {
-                const imageActionAnswer = await inquirer.prompt([{
-                    type: 'list',
-                    name: 'action',
-                    message: `服务 ${name} 没有指定镜像。请选择操作：`,
-                    choices: [
-                        { name: '输入镜像名', value: 'inputImage' },
-                        { name: '自动构建并推送镜像', value: 'autoBuild' }
-                    ],
-                    default: cache[`${name}_image_action`] || 'inputImage'
-                }]);
-
-                if (imageActionAnswer.action === 'inputImage') {
-                    const imageNameAnswer = await inquirer.prompt([{
-                        type: 'input',
-                        name: 'imageName',
-                        message: `请输入服务 ${name} 的镜像名：`,
-                        default: cache[`${name}_image_name`] || undefined
-                    }]);
-                    service.image = imageNameAnswer.imageName;
+        // 添加一个处理环境变量替换的辅助函数
+        function processEnvVariables(value, envConfig) {
+            if (typeof value !== 'string') return value;
+            
+            let processedValue = value;
+            const envMatches = value.match(/\${[^}]+}/g);
+            
+            if (envMatches) {
+                for (const match of envMatches) {
+                    const envExpression = match.slice(2, -1);
+                    let envName, defaultValue;
                     
-                    // 使用辅助函数更新缓存
-                    cache = await updateCache(cache, {
-                        [`${name}_image_action`]: 'inputImage',
-                        [`${name}_image_name`]: imageNameAnswer.imageName
-                    });
-                } else if (imageActionAnswer.action === 'autoBuild') {
-                    const buildImageNameAnswer = await inquirer.prompt([{
-                        type: 'input',
-                        name: 'buildImageName',
-                        message: `请输入服务 ${name} 的构建镜像名：`,
-                        default: cache[`${name}_build_image_name`] || undefined
-                    }]);
-
-                    // 假设 buildContext 是服务的构建上下文路径
-                    const buildContext = service.build.context || '.';
-                    const dockerfilePath = service.build.dockerfile || 'Dockerfile';
-
-                    // 执行 Docker 构建命令
-                    const buildCommand = `docker build -t ${buildImageNameAnswer.buildImageName} -f ${dockerfilePath} ${buildContext}`;
-                    console.log(`正在构建镜像：${buildCommand}`);
-                    require('child_process').execSync(buildCommand, { stdio: 'inherit' });
-
-                    // 执行 Docker 推送命令
-                    const pushCommand = `docker push ${buildImageNameAnswer.buildImageName}`;
-                    console.log(`正在推送镜像：${pushCommand}`);
-                    require('child_process').execSync(pushCommand, { stdio: 'inherit' });
-
-                    service.image = buildImageNameAnswer.buildImageName;
+                    if (envExpression.includes(':-')) {
+                        [envName, defaultValue] = envExpression.split(':-');
+                    } else {
+                        envName = envExpression;
+                    }
                     
-                    // 使用辅助函数更新缓存
-                    cache = await updateCache(cache, {
-                        [`${name}_image_action`]: 'autoBuild',
-                        [`${name}_build_image_name`]: buildImageNameAnswer.buildImageName
-                    });
+                    // 获取环境变量值或使用默认值
+                    const envValue = envConfig[envName] || process.env[envName] || defaultValue || '';
+                    processedValue = processedValue.replace(match, envValue);
                 }
             }
+            
+            return processedValue;
+        }
 
-            manifest.services[name] = {
+        // 修改服务处理部分，在处理 services 时应用环境变量替换
+        for (const [name, service] of Object.entries(composeData.services)) {
+            // 处理服务名称中的环境变量
+            const processedName = processEnvVariables(name, envConfig);
+            
+            // 处理镜像名称中的环境变量
+            if (service.image) {
+                service.image = processEnvVariables(service.image, envConfig);
+            }
+
+            manifest.services[processedName] = {
                 image: service.image
             };
 
-            // 修改 environment 处理部分
+            // 处理环境变量
             if (service.env_file) {
-                // Load environment variables from specified env_file
-                const envFilePath = path.resolve(executionDir, service.env_file);
+                const envFilePath = path.resolve(executionDir, processEnvVariables(service.env_file, envConfig));
                 const fileEnvConfig = dotenv.config({ path: envFilePath }).parsed || {};
-                manifest.services[name].environment = Object.entries(fileEnvConfig).map(
-                    ([key, value]) => `${key}=${value}`
+                manifest.services[processedName].environment = Object.entries(fileEnvConfig).map(
+                    ([key, value]) => `${processEnvVariables(key, envConfig)}=${processEnvVariables(value, envConfig)}`
                 );
             } else if (service.environment) {
-                // Handle inline environment variables
                 if (Array.isArray(service.environment)) {
-                    // 如果是数组格式，直接使用
-                    manifest.services[name].environment = service.environment;
-                } else {
-                    // 如果是对象格式，转换为数组
-                    manifest.services[name].environment = [];
-                    for (const [key, value] of Object.entries(service.environment)) {
-                        if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
-                            // Extract the variable name from ${VAR_NAME}
-                            const envVarName = value.slice(2, -1);
-                            // Replace with the value from the .env file or process.env
-                            const envValue = envConfig[envVarName] || process.env[envVarName] || '';
-                            manifest.services[name].environment.push(`${key}=${envValue}`);
-                        } else {
-                            manifest.services[name].environment.push(`${key}=${value}`);
+                    manifest.services[processedName].environment = service.environment.map(env => {
+                        if (typeof env === 'string') {
+                            const [key, value] = env.split('=');
+                            return `${processEnvVariables(key, envConfig)}=${processEnvVariables(value, envConfig)}`;
                         }
+                        return env;
+                    });
+                } else {
+                    manifest.services[processedName].environment = [];
+                    for (const [key, value] of Object.entries(service.environment)) {
+                        const processedKey = processEnvVariables(key, envConfig);
+                        const processedValue = processEnvVariables(value, envConfig);
+                        manifest.services[processedName].environment.push(`${processedKey}=${processedValue}`);
                     }
                 }
             }
 
-            // 修改 volumes 处理部分
+            // 处理命令中的环境变量
+            if (service.command) {
+                if (Array.isArray(service.command)) {
+                    manifest.services[processedName].command = service.command.map(cmd => 
+                        processEnvVariables(cmd, envConfig)
+                    );
+                } else {
+                    manifest.services[processedName].command = processEnvVariables(service.command, envConfig);
+                }
+            }
+
+            // 处理依赖关系中的环境变量
+            if (service.depends_on) {
+                if (Array.isArray(service.depends_on)) {
+                    manifest.services[processedName].depends_on = service.depends_on.map(dep => 
+                        processEnvVariables(dep, envConfig)
+                    );
+                } else {
+                    manifest.services[processedName].depends_on = Object.fromEntries(
+                        Object.entries(service.depends_on).map(([key, value]) => [
+                            processEnvVariables(key, envConfig),
+                            value
+                        ])
+                    );
+                }
+            }
+
+            // 处理卷挂载中的环境变量
             if (service.volumes) {
-                manifest.services[name].binds = [];
+                manifest.services[processedName].binds = [];
                 
                 for (const volume of service.volumes) {
-                    // 移除注释部分
-                    const volumeConfig = typeof volume === 'string' ? volume.split('#')[0].trim() : volume;
+                    // 移除注释部分并处理环境变量
+                    const volumeConfig = typeof volume === 'string' ? 
+                        processEnvVariables(volume.split('#')[0].trim(), envConfig) : 
+                        volume;
                     
-                    // 如果移除注释后为空，跳过这个配置
                     if (!volumeConfig) continue;
 
                     let targetPath;
@@ -804,36 +803,16 @@ async function convertApp(options = {}) {
 
                     // 提取目标路径，不管是对象格式还是字符串格式
                     if (typeof volumeConfig === 'object') {
-                        targetPath = volumeConfig.target;
-                    } else {
-                        // 先处理环境变量和默认值
-                        let processedVolume = volumeConfig;
-                        if (processedVolume.includes('${')) {
-                            const envMatches = processedVolume.match(/\${[^}]+}/g);
-                            if (envMatches) {
-                                for (const match of envMatches) {
-                                    const envExpression = match.slice(2, -1);
-                                    let envName, defaultValue;
-                                    
-                                    if (envExpression.includes(':-')) {
-                                        [envName, defaultValue] = envExpression.split(':-');
-                                    } else {
-                                        envName = envExpression;
-                                    }
-                                    
-                                    // 获取环境变量值或使用默认值
-                                    const envValue = envConfig[envName] || process.env[envName] || defaultValue || '';
-                                    processedVolume = processedVolume.replace(match, envValue);
-                                }
-                            }
+                        targetPath = processEnvVariables(volumeConfig.target, envConfig);
+                        if (volumeConfig.source) {
+                            sourcePath = processEnvVariables(volumeConfig.source, envConfig);
                         }
-
+                    } else {
                         // 分割源路径和目标路径
-                        const volumeParts = processedVolume.split(':');
+                        const volumeParts = volumeConfig.split(':');
                         if (volumeParts.length === 1) {
                             // 处理匿名卷
                             targetPath = volumeParts[0].trim();
-                            const volumeName = path.basename(targetPath);
                             
                             // 询问用户如何处理匿名卷
                             const volumeActionAnswer = await inquirer.prompt([{
@@ -844,17 +823,17 @@ async function convertApp(options = {}) {
                                     { name: '挂载空目录', value: 'emptyDir' },
                                     { name: '忽略挂载', value: 'ignore' }
                                 ],
-                                default: cache[`${name}_volume_${targetPath}_action`] || 'emptyDir'
+                                default: cache[`${processedName}_volume_${targetPath}_action`] || 'emptyDir'
                             }]);
 
                             // 更新缓存
                             cache = await updateCache(cache, {
-                                [`${name}_volume_${targetPath}_action`]: volumeActionAnswer.action
+                                [`${processedName}_volume_${targetPath}_action`]: volumeActionAnswer.action
                             });
 
                             if (volumeActionAnswer.action === 'emptyDir') {
-                                const { bindMount, cache: newCache } = await promptMountLocation(name, targetPath, cache);
-                                manifest.services[name].binds.push(bindMount);
+                                const { bindMount, cache: newCache } = await promptMountLocation(processedName, targetPath, cache);
+                                manifest.services[processedName].binds.push(bindMount);
                                 cache = newCache;  // 更新缓存
                             }
                             continue;
@@ -868,8 +847,28 @@ async function convertApp(options = {}) {
                             !sourcePath.startsWith('/') && !sourcePath.startsWith('~') && !path.isAbsolute(sourcePath);
 
                         if (isNamedVolume) {
-                            // 命名卷直接使用 /lzcapp/var/data 目录
-                            manifest.services[name].binds.push(`/lzcapp/var/data/${sourcePath}:${targetPath}`);
+                            // 询问用户如何处理命名卷
+                            const volumeActionAnswer = await inquirer.prompt([{
+                                type: 'list',
+                                name: 'action',
+                                message: `如何处理命名卷 ${sourcePath}:${targetPath}？`,
+                                choices: [
+                                    { name: '挂载空目录', value: 'emptyDir' },
+                                    { name: '忽略挂载', value: 'ignore' }
+                                ],
+                                default: cache[`${processedName}_volume_${sourcePath}_${targetPath}_action`] || 'emptyDir'
+                            }]);
+
+                            // 更新缓存
+                            cache = await updateCache(cache, {
+                                [`${processedName}_volume_${sourcePath}_${targetPath}_action`]: volumeActionAnswer.action
+                            });
+
+                            if (volumeActionAnswer.action === 'emptyDir') {
+                                const { bindMount, cache: newCache } = await promptMountLocation(processedName, targetPath, cache);
+                                manifest.services[processedName].binds.push(bindMount);
+                                cache = newCache;  // 更新缓存
+                            }
                             continue;
                         }
 
@@ -887,8 +886,8 @@ async function convertApp(options = {}) {
                         let absoluteSourcePath;
                         if (sourcePath) {
                             absoluteSourcePath = path.resolve(executionDir, sourcePath);
-                            const directoryExists = await fs.pathExists(absoluteSourcePath);
-                            if (directoryExists) {
+                            const exists = await fs.pathExists(absoluteSourcePath);
+                            if (exists) {
                                 choices.unshift({ name: '使用目录内容', value: 'useContent' });
                             }
                         }
@@ -899,12 +898,12 @@ async function convertApp(options = {}) {
                             name: 'action',
                             message: `如何处理挂载点 ${targetPath}？`,
                             choices: choices,
-                            default: cache[`${name}_volume_${targetPath}_action`] || (sourcePath ? 'useContent' : 'emptyDir')
+                            default: cache[`${processedName}_volume_${targetPath}_action`] || (sourcePath ? 'useContent' : 'emptyDir')
                         }]);
 
                         // 更新缓存
                         cache = await updateCache(cache, {
-                            [`${name}_volume_${targetPath}_action`]: volumeActionAnswer.action
+                            [`${processedName}_volume_${targetPath}_action`]: volumeActionAnswer.action
                         });
 
                         if (volumeActionAnswer.action === 'useContent' && sourcePath) {
@@ -912,22 +911,14 @@ async function convertApp(options = {}) {
                             const relativePath = path.relative(executionDir, absoluteSourcePath);
                             // 使用 posix 风格的路径
                             const posixPath = relativePath.split(path.sep).join(path.posix.sep);
-                            manifest.services[name].binds.push(`/lzcapp/pkg/content/${posixPath}:${targetPath}`);
+                            manifest.services[processedName].binds.push(`/lzcapp/pkg/content/${posixPath}:${targetPath}`);
                         } else if (volumeActionAnswer.action === 'emptyDir') {
-                            const { bindMount, cache: newCache } = await promptMountLocation(name, targetPath, cache);
-                            manifest.services[name].binds.push(bindMount);
+                            const { bindMount, cache: newCache } = await promptMountLocation(processedName, targetPath, cache);
+                            manifest.services[processedName].binds.push(bindMount);
                             cache = newCache;  // 更新缓存
                         }
                     }
                 }
-            }
- 
-            if (service.command) {
-                manifest.services[name].command = service.command;
-            }
-
-            if (service.depends_on) {
-                manifest.services[name].depends_on = service.depends_on;
             }
         }
 
@@ -936,8 +927,8 @@ async function convertApp(options = {}) {
 
         // 复制图标文件，如果源文件和目标文件不同才复制
         const iconDestPath = path.join(process.cwd(), 'icon.png');
-        if (path.resolve(iconPath) !== path.resolve(iconDestPath)) {
-            await fs.copy(iconPath, iconDestPath);
+        if (path.resolve(options.icon) !== path.resolve(iconDestPath)) {
+            await fs.copy(options.icon, iconDestPath);
         }
 
         // 创建 lpk 文件
