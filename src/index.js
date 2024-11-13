@@ -5,6 +5,8 @@ const path = require('path');
 const archiver = require('archiver');
 const tar = require('tar');
 const dotenv = require('dotenv');
+const crypto = require('crypto');
+const os = require('os');
 
 const ASCII_LOGO = `
 $$\\                                   $$\\   $$\\     $$\\ 
@@ -40,11 +42,30 @@ async function loadCache() {
     return {};
 }
 
-// 新增：保存选择到缓存
+// 修改：保存选择到缓存
 async function saveCache(cache) {
     try {
         const cachePath = path.join(process.cwd(), '.lzc-dtl-cache.json');
-        await fs.writeJson(cachePath, cache, { spaces: 2 });
+        // 如果缓存文件已存在，先读取现有内容
+        let existingCache = {};
+        if (await fs.pathExists(cachePath)) {
+            existingCache = await fs.readJson(cachePath);
+        }
+        // 合并现有缓存和新缓存
+        const mergedCache = {
+            ...existingCache,
+            ...cache
+        };
+        // 特殊处理镜像缓存
+        for (const [key, value] of Object.entries(cache)) {
+            if (key.startsWith('image_')) {
+                mergedCache[key] = {
+                    ...(existingCache[key] || {}),
+                    ...value
+                };
+            }
+        }
+        await fs.writeJson(cachePath, mergedCache, { spaces: 2 });
     } catch (error) {
         console.warn('保存缓存失败:', error.message);
     }
@@ -52,17 +73,33 @@ async function saveCache(cache) {
 
 // 修改 updateCache 函数
 async function updateCache(cache, updates) {
-    const newCache = {
-        ...cache
-    };
+    // 创建深拷贝以避免直接修改原对象
+    const newCache = JSON.parse(JSON.stringify(cache));
     
-    // 递归合并对象，确保布尔值正确处理
+    // 递归合并对象，确保布尔值和镜像缓存正确处理
     for (const [key, value] of Object.entries(updates)) {
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if (key.startsWith('image_')) {
+            // 特殊处理镜像缓存
             newCache[key] = {
-                ...(newCache[key] || {}),
-                ...value
+                ...(newCache[key] || {}),  // 保留现有的镜像缓存
+                ...value                    // 合并新的值
             };
+        } else if (key === 'registryUrl') {
+            // 保存全局注册表地址
+            newCache.registryUrl = value;
+        } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+            // 处理嵌套对象
+            newCache[key] = newCache[key] || {};
+            for (const [nestedKey, nestedValue] of Object.entries(value)) {
+                if (typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+                    newCache[key][nestedKey] = {
+                        ...(newCache[key][nestedKey] || {}),
+                        ...nestedValue
+                    };
+                } else {
+                    newCache[key][nestedKey] = nestedValue;
+                }
+            }
         } else if (typeof value === 'boolean') {
             // 确保布尔值被正确保存
             newCache[key] = value;
@@ -71,6 +108,7 @@ async function updateCache(cache, updates) {
         }
     }
     
+    // 使用修改后的 saveCache 函数
     await saveCache(newCache);
     return newCache;
 }
@@ -327,7 +365,7 @@ async function convertApp(options = {}) {
             throw new Error('在交互模式下必须指定 --background-task 选项');
         }
         if (options.multiInstance === undefined || options.multiInstance === null) {
-            throw new Error('在非交互模式下必须指定 --multi-instance 选项');
+            throw new Error('在非交互式下必须指定 --multi-instance 选项');
         }
         
         answers = {
@@ -399,10 +437,10 @@ async function convertApp(options = {}) {
                 { name: '从docker-compose读取端口', value: 'from_compose' }
             ];
 
-            // 询问是否需要添加更多路由
+            // 询问是否需要添更多路由
             let addMore = true;
             while (addMore) {
-                // 选择路由类型
+                // 选路由类型
                 const routeTypeAnswer = await inquirer.prompt([{
                     type: 'list',
                     name: 'type',
@@ -505,7 +543,7 @@ async function convertApp(options = {}) {
                                             }
                                         });
 
-                                        // 构建标 URL，确保路径正确拼接
+                                        // 构建 URL，确保路径正确拼接
                                         const targetPath = targetPathAnswer.targetPath.startsWith('/') ? targetPathAnswer.targetPath : '/' + targetPathAnswer.targetPath;
                                         const target = `${routeTypeForPort.type}://${serviceName}.${answers.package}.lzcapp:${containerPort}${targetPath}`;
 
@@ -670,10 +708,10 @@ async function convertApp(options = {}) {
             }));
         }
 
-        // 在处理 services 的部���之前，直接在当前目录创建 content.tar
+        // 在处理 services 的部之前，直接在当前目录创建 content.tar
         const executionDir = process.cwd(); // 获取 lzc-dtl 执行的目录
 
-        // 创建 content.tar，包含当前目录下的所有文件和目录
+        // 创建 content.tar，包含当前目录下的有文件和目录
         await tar.create(
             {
                 file: 'content.tar',
@@ -692,7 +730,7 @@ async function convertApp(options = {}) {
         const envPath = path.join(process.cwd(), '.env');
         const envConfig = dotenv.config({ path: envPath }).parsed || {};
 
-        // 添加一个处理环境变量替换的辅助函数
+        // 添加一个处理环境变量替换的辅助数
         function processEnvVariables(value, envConfig) {
             if (typeof value !== 'string') return value;
             
@@ -719,14 +757,19 @@ async function convertApp(options = {}) {
             return processedValue;
         }
 
-        // 修改服务处理部分，在处理 services 时应用环境变量替换
+        // Load global config
+        const globalConfig = await loadGlobalConfig();
+
+        // 修改处理服务的循环
         for (const [name, service] of Object.entries(composeData.services)) {
             // 处理服务名称中的环境变量
             const processedName = processEnvVariables(name, envConfig);
             
-            // 处理镜像名称中的环境变量
+            // 处理镜像名称中的环境变量并处理镜像
             if (service.image) {
-                service.image = processEnvVariables(service.image, envConfig);
+                const processedImage = processEnvVariables(service.image, envConfig);
+                // 处理镜像并获取新的镜像名��
+                service.image = await processImage(processedImage, answers.package, cache, globalConfig);
             }
 
             manifest.services[processedName] = {
@@ -1009,6 +1052,158 @@ async function promptMountLocation(name, targetPath, cache) {
             cache
         };
     }
+}
+
+// Add this function to handle global config
+async function loadGlobalConfig() {
+    try {
+        const configPath = path.join(os.homedir(), '.lzc-dtl.json');
+        if (await fs.pathExists(configPath)) {
+            return await fs.readJson(configPath);
+        }
+    } catch (error) {
+        console.warn('读取全局配置失败:', error.message);
+    }
+    return {};
+}
+
+// Add this function to save global config
+async function saveGlobalConfig(config) {
+    try {
+        const configPath = path.join(os.homedir(), '.lzc-dtl.json');
+        await fs.writeJson(configPath, config, { spaces: 2 });
+    } catch (error) {
+        console.warn('保存全局配置失败:', error.message);
+    }
+}
+
+// Add this function to handle image processing
+async function processImage(imageName, packageName, cache, globalConfig) {
+    // First check local cache
+    let registryUrl = cache.registryUrl;
+    
+    // If not in local cache, check global config
+    if (!registryUrl && globalConfig.registryUrl) {
+        registryUrl = globalConfig.registryUrl;
+    }
+    
+    // Generate cache key for this specific image - 使用完整的镜像名称
+    const imageKey = `image_${imageName.replace(/[/:]/g, '_')}`;
+    
+    // 如果镜像缓存存在且有 newImageName，询问是否使用缓存的配置
+    if (cache[imageKey]?.newImageName) {
+        const useCacheAnswer = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'useCache',
+            message: '发现已缓存的镜像配置，是否使用？',
+            default: true
+        }]);
+
+        if (useCacheAnswer.useCache) {
+            console.log(`使用缓存的镜像配置: ${cache[imageKey].newImageName}`);
+            return cache[imageKey].newImageName;
+        }
+    }
+    
+    // Ask if user wants to push to remote registry
+    const pushAnswer = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'push',
+        message: '是否需要推送镜像到远程仓库？',
+        default: cache[imageKey]?.push === undefined ? !!registryUrl : cache[imageKey]?.push
+    }]);
+    
+    // 更新缓存时使用完整的对象结构
+    let imageCache = {
+        ...(cache[imageKey] || {}),
+        originalImage: imageName,  // 保存原始镜像名
+        push: pushAnswer.push
+    };
+    
+    cache = await updateCache(cache, {
+        [imageKey]: imageCache
+    });
+    
+    if (!pushAnswer.push) {
+        return imageName;
+    }
+    
+    // Ask for registry URL if not available
+    if (!registryUrl) {
+        const registryAnswer = await inquirer.prompt([{
+            type: 'input',
+            name: 'url',
+            message: '请输入远程仓库地址：',
+            validate: input => input.trim() ? true : '仓库地址不能为空',
+            default: cache[imageKey]?.registryUrl
+        }]);
+        
+        registryUrl = registryAnswer.url;
+        
+        // Ask if want to save globally
+        const saveGloballyAnswer = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'save',
+            message: '是否要全局保存该仓库地址？',
+            default: true
+        }]);
+        
+        if (saveGloballyAnswer.save) {
+            await saveGlobalConfig({ ...globalConfig, registryUrl });
+        }
+        
+        // 更新镜像缓存和全局注册表地址
+        imageCache = {
+            ...imageCache,
+            registryUrl
+        };
+        
+        cache = await updateCache(cache, {
+            registryUrl,
+            [imageKey]: imageCache
+        });
+    }
+    
+    // Generate new image name
+    const packageBaseName = packageName.split('.').pop();
+    const imageHash = crypto.createHash('md5').update(imageName).digest('hex');
+    const newImageName = `${registryUrl}/${packageBaseName}:${imageHash}`;
+    
+    // 更新镜像缓存，保留之前的值
+    imageCache = {
+        ...imageCache,
+        newImageName,
+        timestamp: new Date().toISOString()  // 添加时间戳
+    };
+    
+    cache = await updateCache(cache, {
+        [imageKey]: imageCache
+    });
+    
+    console.log(`正在拉取原始镜像: ${imageName}`);
+    await execCommand(`docker pull ${imageName}`);
+    
+    console.log(`正在标记镜像: ${newImageName}`);
+    await execCommand(`docker tag ${imageName} ${newImageName}`);
+    
+    console.log(`正在推送镜像到远程仓库: ${newImageName}`);
+    await execCommand(`docker push ${newImageName}`);
+    
+    return newImageName;
+}
+
+// Add this helper function to execute commands
+async function execCommand(command) {
+    const { exec } = require('child_process');
+    return new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error(`执行命令失败: ${error.message}`));
+                return;
+            }
+            resolve(stdout.trim());
+        });
+    });
 }
 
 module.exports = { convertApp }; 
