@@ -1,6 +1,6 @@
 {
   "name": "lzc-dtl",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "懒猫微服应用转换器",
   "main": "src/index.js",
   "bin": {
