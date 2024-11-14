@@ -199,6 +199,8 @@ async function convertApp(options = {}) {
                 { name: '每个用户创建一个实例', value: 'multi_instance', checked: cache.app_features?.includes('multi_instance') },
                 { name: '公开路由 (无需登录即可访问)', value: 'public_path', checked: cache.app_features?.includes('public_path') },
                 { name: 'GPU加速', value: 'gpu_accel', checked: cache.app_features?.includes('gpu_accel') },
+                { name: 'KVM加速', value: 'kvm_accel', checked: cache.app_features?.includes('kvm_accel') },
+                { name: 'USB设备挂载', value: 'usb_accel', checked: cache.app_features?.includes('usb_accel') },
                 { name: '文件关联 (可以打开特定类型文件)', value: 'file_handler', checked: cache.app_features?.includes('file_handler') }
             ]
         });
@@ -399,7 +401,7 @@ async function convertApp(options = {}) {
             'lzc-sdk-version': '0.1',
             name: answers.name,
             package: answers.package,
-            version: answers.version || '0.0.1', // 使用用户输入的版本或默认值
+            version: answers.version || '0.0.1',
             description: answers.description,
             homepage: answers.homepage,
             author: answers.author,
@@ -407,7 +409,9 @@ async function convertApp(options = {}) {
                 subdomain: answers.subdomain,
                 background_task: answers.app_features?.includes('background_task') || false,
                 multi_instance: answers.app_features?.includes('multi_instance') || false,
-                gpu_accel: answers.app_features?.includes('gpu_accel') || false
+                gpu_accel: answers.app_features?.includes('gpu_accel') || false,
+                kvm_accel: answers.app_features?.includes('kvm_accel') || false,
+                usb_accel: answers.app_features?.includes('usb_accel') || false
             },
             services: {}
         };
@@ -768,7 +772,7 @@ async function convertApp(options = {}) {
             // 处理镜像名称中的环境变量并处理镜像
             if (service.image) {
                 const processedImage = processEnvVariables(service.image, envConfig);
-                // 处理镜像并获取新的镜像名��
+                // 处理镜像并获取新的镜像名
                 service.image = await processImage(processedImage, answers.package, cache, globalConfig);
             }
 
