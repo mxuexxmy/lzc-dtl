@@ -774,12 +774,12 @@ async function convertApp(options = {}) {
                 const useCacheAnswer = await inquirer.prompt([{
                     type: 'confirm',
                     name: 'useCache',
-                    message: '发现已缓存的构建配置，是否使用？',
+                    message: `[${serviceName}] 发现已缓存的构建配置，是否使用？`,
                     default: true
                 }]);
 
                 if (useCacheAnswer.useCache) {
-                    console.log(`使用缓存的构建配置: ${cache[buildKey].imageName}`);
+                    console.log(`[${serviceName}] 使用缓存的构建配置: ${cache[buildKey].imageName}`);
                     return cache[buildKey].imageName;
                 }
             }
@@ -788,7 +788,7 @@ async function convertApp(options = {}) {
             const buildAnswer = await inquirer.prompt([{
                 type: 'confirm',
                 name: 'build',
-                message: `是否需要构建服务 ${serviceName} 的镜像？`,
+                message: `[${serviceName}] 是否需要构建镜像？`,
                 default: cache[buildKey]?.build === undefined ? true : cache[buildKey]?.build
             }]);
             
@@ -856,10 +856,10 @@ async function convertApp(options = {}) {
             });
             
             // Build and push
-            console.log(`正在构建镜像: ${imageName}`);
+            console.log(`[${serviceName}] 正在构建镜像: ${imageName}`);
             await execCommand(`docker build -t ${imageName} .`);
             
-            console.log(`正在推送镜像到远程仓库: ${imageName}`);
+            console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${imageName}`);
             await execCommand(`docker push ${imageName}`);
             
             return imageName;
@@ -875,7 +875,7 @@ async function convertApp(options = {}) {
             // 处理镜像或构建
             if (service.image) {
                 const processedImage = processEnvVariables(service.image, envConfig);
-                serviceImage = await processImage(processedImage, answers.package, cache, globalConfig);
+                serviceImage = await processImage(processedImage, answers.package, cache, globalConfig, processedName);
             } else if (service.build) {
                 // 处理构建配置
                 serviceImage = await processBuild(processedName, answers.package, cache, globalConfig);
@@ -1189,7 +1189,7 @@ async function saveGlobalConfig(config) {
 }
 
 // Add this function to handle image processing
-async function processImage(imageName, packageName, cache, globalConfig) {
+async function processImage(imageName, packageName, cache, globalConfig, serviceName) {
     // First check local cache
     let registryUrl = cache.registryUrl;
     
@@ -1206,12 +1206,12 @@ async function processImage(imageName, packageName, cache, globalConfig) {
         const useCacheAnswer = await inquirer.prompt([{
             type: 'confirm',
             name: 'useCache',
-            message: '发现已缓存的镜像配置，是否使用？',
+            message: `[${serviceName}] 发现已缓存的镜像配置，是否使用？`,
             default: true
         }]);
 
         if (useCacheAnswer.useCache) {
-            console.log(`使用缓存的镜像配置: ${cache[imageKey].newImageName}`);
+            console.log(`[${serviceName}] 使用缓存的镜像配置: ${cache[imageKey].newImageName}`);
             return cache[imageKey].newImageName;
         }
     }
@@ -1220,7 +1220,7 @@ async function processImage(imageName, packageName, cache, globalConfig) {
     const pushAnswer = await inquirer.prompt([{
         type: 'confirm',
         name: 'push',
-        message: '是否需要推送镜像到远程仓库？',
+        message: `[${serviceName}] 是否需要推送镜像到远程仓库？`,
         default: cache[imageKey]?.push === undefined ? !!registryUrl : cache[imageKey]?.push
     }]);
     
@@ -1291,13 +1291,13 @@ async function processImage(imageName, packageName, cache, globalConfig) {
         [imageKey]: imageCache
     });
     
-    console.log(`正在拉取原始镜像: ${imageName}`);
+    console.log(`[${serviceName}] 正在拉取原始镜像: ${imageName}`);
     await execCommand(`docker pull ${imageName}`);
     
-    console.log(`正在标记镜像: ${newImageName}`);
+    console.log(`[${serviceName}] 正在标记镜像: ${newImageName}`);
     await execCommand(`docker tag ${imageName} ${newImageName}`);
     
-    console.log(`正在推送镜像到远程仓库: ${newImageName}`);
+    console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${newImageName}`);
     await execCommand(`docker push ${newImageName}`);
     
     return newImageName;
