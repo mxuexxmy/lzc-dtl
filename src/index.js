@@ -764,20 +764,127 @@ async function convertApp(options = {}) {
         // Load global config
         const globalConfig = await loadGlobalConfig();
 
-        // 修改处理服务的循环
+        // 添加处理构建的函数
+        async function processBuild(serviceName, packageName, cache, globalConfig) {
+            // Generate cache key for this build
+            const buildKey = `build_${serviceName}`;
+            
+            // 如果构建缓存存在且有 imageName，询问是否使用缓存
+            if (cache[buildKey]?.imageName) {
+                const useCacheAnswer = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'useCache',
+                    message: '发现已缓存的构建配置，是否使用？',
+                    default: true
+                }]);
+
+                if (useCacheAnswer.useCache) {
+                    console.log(`使用缓存的构建配置: ${cache[buildKey].imageName}`);
+                    return cache[buildKey].imageName;
+                }
+            }
+            
+            // Ask if user wants to build
+            const buildAnswer = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'build',
+                message: `是否需要构建服务 ${serviceName} 的镜像？`,
+                default: cache[buildKey]?.build === undefined ? true : cache[buildKey]?.build
+            }]);
+            
+            // 更新缓存
+            let buildCache = {
+                ...(cache[buildKey] || {}),
+                build: buildAnswer.build
+            };
+            
+            cache = await updateCache(cache, {
+                [buildKey]: buildCache
+            });
+            
+            if (!buildAnswer.build) {
+                throw new Error(`服务 ${serviceName} 既没有 image 也不构建，无法继续`);
+            }
+            
+            // 检查注册表地址
+            let registryUrl = cache.registryUrl;
+            if (!registryUrl && globalConfig.registryUrl) {
+                registryUrl = globalConfig.registryUrl;
+            }
+            
+            // 如果没有注册表地址，询问
+            if (!registryUrl) {
+                const registryAnswer = await inquirer.prompt([{
+                    type: 'input',
+                    name: 'url',
+                    message: '请输入远程仓库地址：',
+                    validate: input => input.trim() ? true : '仓库地址不能为空'
+                }]);
+                
+                registryUrl = registryAnswer.url;
+                
+                // Ask if want to save globally
+                const saveGloballyAnswer = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'save',
+                    message: '是否要全局保存该仓库地址？',
+                    default: true
+                }]);
+                
+                if (saveGloballyAnswer.save) {
+                    await saveGlobalConfig({ ...globalConfig, registryUrl });
+                }
+                
+                // 更新缓存
+                cache = await updateCache(cache, { registryUrl });
+            }
+            
+            // Generate image name
+            const packageBaseName = packageName.split('.').pop();
+            const buildHash = crypto.createHash('md5').update(`${serviceName}_${new Date().toISOString()}`).digest('hex');
+            const imageName = `${registryUrl}/${packageBaseName}:${buildHash}`;
+            
+            // 更新构建缓存
+            buildCache = {
+                ...buildCache,
+                imageName,
+                timestamp: new Date().toISOString()
+            };
+            
+            cache = await updateCache(cache, {
+                [buildKey]: buildCache
+            });
+            
+            // Build and push
+            console.log(`正在构建镜像: ${imageName}`);
+            await execCommand(`docker build -t ${imageName} .`);
+            
+            console.log(`正在推送镜像到远程仓库: ${imageName}`);
+            await execCommand(`docker push ${imageName}`);
+            
+            return imageName;
+        }
+
+        // 修改服务处理部分
         for (const [name, service] of Object.entries(composeData.services)) {
             // 处理服务名称中的环境变量
             const processedName = processEnvVariables(name, envConfig);
             
-            // 处理镜像名称中的环境变量并处理镜像
+            let serviceImage;
+            
+            // 处理镜像或构建
             if (service.image) {
                 const processedImage = processEnvVariables(service.image, envConfig);
-                // 处理镜像并获取新的镜像名
-                service.image = await processImage(processedImage, answers.package, cache, globalConfig);
+                serviceImage = await processImage(processedImage, answers.package, cache, globalConfig);
+            } else if (service.build) {
+                // 处理构建配置
+                serviceImage = await processBuild(processedName, answers.package, cache, globalConfig);
+            } else {
+                throw new Error(`服务 ${processedName} 既没有 image 也没有 build 配置`);
             }
 
             manifest.services[processedName] = {
-                image: service.image
+                image: serviceImage
             };
 
             // 处理环境变量
