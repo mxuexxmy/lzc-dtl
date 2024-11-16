@@ -461,17 +461,37 @@ async function convertApp(options = {}) {
                     for (const [serviceName, service] of Object.entries(composeData.services)) {
                         if (service.ports) {
                             for (const portMapping of service.ports) {
-                                const [hostPort, containerPort] = portMapping.split(':');
+                                // 处理不同格式的端口映射
+                                let hostPort, containerPort;
+                                
+                                if (typeof portMapping === 'string') {
+                                    if (portMapping.includes(':')) {
+                                        // 处理 1080:80 格式
+                                        [hostPort, containerPort] = portMapping.split(':');
+                                    } else {
+                                        // 处理 80 格式
+                                        containerPort = portMapping;
+                                        hostPort = portMapping;
+                                    }
+                                } else if (typeof portMapping === 'number') {
+                                    // 处理纯数字格式
+                                    containerPort = portMapping.toString();
+                                    hostPort = containerPort;
+                                }
+                                
+                                // 移除可能的协议前缀（如 "80/tcp"）
+                                containerPort = containerPort.split('/')[0];
+                                hostPort = hostPort.split('/')[0];
                                 
                                 // 生成一个更有结构的缓存键
                                 const cacheKey = `port_mappings`;
-                                const mappingKey = `${serviceName}_${portMapping}`;
+                                const mappingKey = `${serviceName}_${hostPort}_${containerPort}`;
                                 
                                 // 确保布尔值默认值正确处理
                                 const usePortAnswer = await inquirer.prompt([{
                                     type: 'confirm',
                                     name: 'use',
-                                    message: `是否添加服务 ${serviceName} 的端口映射 ${portMapping}？`,
+                                    message: `是否添加服务 ${serviceName} 的端口映射 ${hostPort}:${containerPort}？`,
                                     default: cache[cacheKey]?.[mappingKey]?.use === undefined ? true : cache[cacheKey]?.[mappingKey]?.use
                                 }]);
 
@@ -812,7 +832,7 @@ async function convertApp(options = {}) {
                 registryUrl = globalConfig.registryUrl;
             }
             
-            // 如果没有注册表地址，询问
+            // 如果没有注表地址，询问
             if (!registryUrl) {
                 const registryAnswer = await inquirer.prompt([{
                     type: 'input',
@@ -915,13 +935,32 @@ async function convertApp(options = {}) {
 
             // 处理命令中的环境变量
             if (service.command) {
+                let processedCommand;
                 if (Array.isArray(service.command)) {
-                    manifest.services[processedName].command = service.command.map(cmd => 
-                        processEnvVariables(cmd, envConfig)
-                    );
+                    // 如果是数组，先处理每个元素的环境变量，然后用空格连接
+                    processedCommand = service.command
+                        .map(cmd => processEnvVariables(cmd, envConfig))
+                        .join(' ');
                 } else {
-                    manifest.services[processedName].command = processEnvVariables(service.command, envConfig);
+                    // 如果是字符串，直接处理环境变量
+                    processedCommand = processEnvVariables(service.command, envConfig);
                 }
+                manifest.services[processedName].command = processedCommand;
+            }
+
+            // 处理 entrypoint 中的环境变量
+            if (service.entrypoint) {
+                let processedEntrypoint;
+                if (Array.isArray(service.entrypoint)) {
+                    // 如果是数组，先处理每个元素的环境变量，然后用空格连接
+                    processedEntrypoint = service.entrypoint
+                        .map(entry => processEnvVariables(entry, envConfig))
+                        .join(' ');
+                } else {
+                    // 如果是字符串，直接处理环境变量
+                    processedEntrypoint = processEnvVariables(service.entrypoint, envConfig);
+                }
+                manifest.services[processedName].entrypoint = processedEntrypoint;
             }
 
             // 处理依赖关系中的环境变量
@@ -1206,7 +1245,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
         const useCacheAnswer = await inquirer.prompt([{
             type: 'confirm',
             name: 'useCache',
-            message: `[${serviceName}] 发现已缓存的镜像配置，是否使用？`,
+            message: `[${serviceName}] 发现已缓存的镜像置，是否使用？`,
             default: true
         }]);
 
