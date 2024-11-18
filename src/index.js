@@ -444,7 +444,7 @@ async function convertApp(options = {}) {
             // 询问是否需要添更多路由
             let addMore = true;
             while (addMore) {
-                // 选路由类型
+                // 路由类型
                 const routeTypeAnswer = await inquirer.prompt([{
                     type: 'list',
                     name: 'type',
@@ -785,7 +785,7 @@ async function convertApp(options = {}) {
         const globalConfig = await loadGlobalConfig();
 
         // 添加处理构建的函数
-        async function processBuild(serviceName, packageName, cache, globalConfig) {
+        async function processBuild(serviceName, packageName, cache, globalConfig, service) {
             // Generate cache key for this build
             const buildKey = `build_${serviceName}`;
             
@@ -875,13 +875,42 @@ async function convertApp(options = {}) {
                 [buildKey]: buildCache
             });
             
-            // Build and push
+            // Get build configuration from the passed service parameter
+            const buildConfig = service.build;
+            let buildContext = '.';
+            let dockerfilePath = null;
+
+            // Handle build config variations
+            if (typeof buildConfig === 'string') {
+                buildContext = buildConfig;
+            } else if (typeof buildConfig === 'object') {
+                buildContext = buildConfig.context || '.';
+                dockerfilePath = buildConfig.dockerfile;
+            }
+
+            // Resolve build context path relative to docker-compose file location
+            buildContext = path.resolve(executionDir, buildContext);
+
+            // Construct build command
+            let buildCmd = `docker build -t ${imageName}`;
+            if (dockerfilePath) {
+                // Resolve dockerfile path relative to build context
+                const fullDockerfilePath = path.resolve(buildContext, dockerfilePath);
+                buildCmd += ` -f ${fullDockerfilePath}`;
+            }
+            buildCmd += ` ${buildContext}`;
+
             console.log(`[${serviceName}] 正在构建镜像: ${imageName}`);
-            await execCommand(`docker build -t ${imageName} .`);
+            console.log(`[${serviceName}] 构建上下文: ${buildContext}`);
+            if (dockerfilePath) {
+                console.log(`[${serviceName}] Dockerfile: ${dockerfilePath}`);
+            }
             
+            await execCommand(buildCmd);
+
             console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${imageName}`);
             await execCommand(`docker push ${imageName}`);
-            
+
             return imageName;
         }
 
@@ -897,8 +926,8 @@ async function convertApp(options = {}) {
                 const processedImage = processEnvVariables(service.image, envConfig);
                 serviceImage = await processImage(processedImage, answers.package, cache, globalConfig, processedName);
             } else if (service.build) {
-                // 处理构建配置
-                serviceImage = await processBuild(processedName, answers.package, cache, globalConfig);
+                // Pass the service object to processBuild
+                serviceImage = await processBuild(processedName, answers.package, cache, globalConfig, service);
             } else {
                 throw new Error(`服务 ${processedName} 既没有 image 也没有 build 配置`);
             }
@@ -1240,7 +1269,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
     // Generate cache key for this specific image - 使用完整的镜像名称
     const imageKey = `image_${imageName.replace(/[/:]/g, '_')}`;
     
-    // 如果镜像缓存存在且有 newImageName，询问是否使用缓存的配置
+    // 如果镜像缓���存在且有 newImageName，询问是否使用缓存的配置
     if (cache[imageKey]?.newImageName) {
         const useCacheAnswer = await inquirer.prompt([{
             type: 'confirm',
