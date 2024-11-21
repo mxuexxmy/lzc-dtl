@@ -140,7 +140,7 @@ async function convertApp(options = {}) {
             questions.push({
                 type: 'input',
                 name: 'package',
-                message: '请输入应用包名：',
+                message: '请输入应用名：',
                 default: cache.package || undefined
             });
         }
@@ -364,7 +364,7 @@ async function convertApp(options = {}) {
     } else {
         // 使用命令行参数时，确保这两个值有效
         if (options.backgroundTask === undefined || options.backgroundTask === null) {
-            throw new Error('在交互模式下必须指定 --background-task 选项');
+            throw new Error('在交互模下必须指定 --background-task 选项');
         }
         if (options.multiInstance === undefined || options.multiInstance === null) {
             throw new Error('在非交互式下必须指定 --multi-instance 选项');
@@ -393,7 +393,7 @@ async function convertApp(options = {}) {
             throw new Error('选择的文件不是有效的 docker-compose 文件');
         }
 
-        // 获取服务列表用于路由选择
+        // 获取服务列表用于由选择
         const services = Object.keys(composeData.services);
 
         // 生成 manifest.yml
@@ -479,7 +479,7 @@ async function convertApp(options = {}) {
                                     hostPort = containerPort;
                                 }
                                 
-                                // 移除可能的协议前缀（如 "80/tcp"）
+                                // 移除可能的协议前缀（ "80/tcp"）
                                 containerPort = containerPort.split('/')[0];
                                 hostPort = hostPort.split('/')[0];
                                 
@@ -768,14 +768,29 @@ async function convertApp(options = {}) {
                     
                     if (envExpression.includes(':-')) {
                         [envName, defaultValue] = envExpression.split(':-');
+                        // 尝试将默认值转换为数字
+                        if (!isNaN(defaultValue) && defaultValue.trim() !== '') {
+                            defaultValue = Number(defaultValue);
+                        }
                     } else {
                         envName = envExpression;
                     }
                     
                     // 获取环境变量值或使用默认值
                     const envValue = envConfig[envName] || process.env[envName] || defaultValue || '';
-                    processedValue = processedValue.replace(match, envValue);
+                    
+                    // 如果替换值是数字，直接使用数字值而不是字符串
+                    if (typeof envValue === 'number') {
+                        processedValue = processedValue.replace(match, envValue);
+                    } else {
+                        processedValue = processedValue.replace(match, envValue.toString());
+                    }
                 }
+            }
+            
+            // 如果整个值是数字字符串，转换为数字
+            if (!isNaN(processedValue) && processedValue.trim() !== '') {
+                return Number(processedValue);
             }
             
             return processedValue;
@@ -826,61 +841,12 @@ async function convertApp(options = {}) {
                 throw new Error(`服务 ${serviceName} 既没有 image 也不构建，无法继续`);
             }
             
-            // 检查注册表地址
-            let registryUrl = cache.registryUrl;
-            if (!registryUrl && globalConfig.registryUrl) {
-                registryUrl = globalConfig.registryUrl;
-            }
-            
-            // 如果没有注表地址，询问
-            if (!registryUrl) {
-                const registryAnswer = await inquirer.prompt([{
-                    type: 'input',
-                    name: 'url',
-                    message: '请输入远程仓库地址：',
-                    validate: input => input.trim() ? true : '仓库地址不能为空'
-                }]);
-                
-                registryUrl = registryAnswer.url;
-                
-                // Ask if want to save globally
-                const saveGloballyAnswer = await inquirer.prompt([{
-                    type: 'confirm',
-                    name: 'save',
-                    message: '是否要全局保存该仓库地址？',
-                    default: true
-                }]);
-                
-                if (saveGloballyAnswer.save) {
-                    await saveGlobalConfig({ ...globalConfig, registryUrl });
-                }
-                
-                // 更新缓存
-                cache = await updateCache(cache, { registryUrl });
-            }
-            
-            // Generate image name
-            const packageBaseName = packageName.split('.').pop();
-            const buildHash = crypto.createHash('md5').update(`${serviceName}_${new Date().toISOString()}`).digest('hex');
-            const imageName = `${registryUrl}/${packageBaseName}:${buildHash}`;
-            
-            // 更新构建缓存
-            buildCache = {
-                ...buildCache,
-                imageName,
-                timestamp: new Date().toISOString()
-            };
-            
-            cache = await updateCache(cache, {
-                [buildKey]: buildCache
-            });
-            
-            // Get build configuration from the passed service parameter
+            // 获取构建配置
             const buildConfig = service.build;
             let buildContext = '.';
             let dockerfilePath = null;
 
-            // Handle build config variations
+            // 处理构建配置
             if (typeof buildConfig === 'string') {
                 buildContext = buildConfig;
             } else if (typeof buildConfig === 'object') {
@@ -888,28 +854,114 @@ async function convertApp(options = {}) {
                 dockerfilePath = buildConfig.dockerfile;
             }
 
-            // Resolve build context path relative to docker-compose file location
-            buildContext = path.resolve(executionDir, buildContext);
+            // 解析构建上下文路径（相对于 docker-compose 文件位置）
+            const composeDir = path.dirname(path.resolve(process.cwd(), options.compose));
+            buildContext = path.resolve(composeDir, buildContext);
 
-            // Construct build command
+            // 询问推送目标
+            const pushTargetAnswer = await inquirer.prompt([{
+                type: 'list',
+                name: 'target',
+                message: `[${serviceName}] 请选择构建镜像的推送目标：`,
+                choices: [
+                    { name: '推送到自定义镜像仓库', value: 'custom' },
+                    { name: '推送到懒猫微服官方镜像源', value: 'lazycat' }
+                ],
+                default: cache[buildKey]?.pushTarget || 'custom'
+            }]);
+
+            // 更新缓存
+            buildCache = {
+                ...buildCache,
+                pushTarget: pushTargetAnswer.target
+            };
+
+            let registryUrl;
+            let imageName;
+
+            if (pushTargetAnswer.target === 'custom') {
+                // 获取自定义仓库地址
+                registryUrl = cache.registryUrl;
+                if (!registryUrl && globalConfig.registryUrl) {
+                    registryUrl = globalConfig.registryUrl;
+                }
+
+                if (!registryUrl) {
+                    const registryAnswer = await inquirer.prompt([{
+                        type: 'input',
+                        name: 'url',
+                        message: '请输入远程仓库地址：',
+                        validate: input => input.trim() ? true : '仓库地址不能为空'
+                    }]);
+
+                    registryUrl = registryAnswer.url;
+
+                    const saveGloballyAnswer = await inquirer.prompt([{
+                        type: 'confirm',
+                        name: 'save',
+                        message: '是否要全局保存该仓库地址？',
+                        default: true
+                    }]);
+
+                    if (saveGloballyAnswer.save) {
+                        await saveGlobalConfig({ ...globalConfig, registryUrl });
+                    }
+
+                    cache = await updateCache(cache, { registryUrl });
+                }
+
+                // 生成镜像名称
+                const packageBaseName = packageName.split('.').pop();
+                const buildHash = crypto.createHash('md5').update(`${serviceName}_${new Date().toISOString()}`).digest('hex');
+                imageName = `${registryUrl}/${packageBaseName}:${buildHash}`;
+            } else {
+                // 为懒猫微服生成临时镜像名称
+                const tempHash = crypto.createHash('md5').update(`${serviceName}_${new Date().toISOString()}`).digest('hex');
+                imageName = `temp-build-${tempHash}`;
+            }
+
+            // 构建命令
             let buildCmd = `docker build -t ${imageName}`;
             if (dockerfilePath) {
-                // Resolve dockerfile path relative to build context
+                // 解析 Dockerfile 路径（相对于构建上下文）
                 const fullDockerfilePath = path.resolve(buildContext, dockerfilePath);
-                buildCmd += ` -f ${fullDockerfilePath}`;
+                buildCmd += ` -f "${fullDockerfilePath}"`;
             }
-            buildCmd += ` ${buildContext}`;
+            buildCmd += ` "${buildContext}"`;
 
             console.log(`[${serviceName}] 正在构建镜像: ${imageName}`);
             console.log(`[${serviceName}] 构建上下文: ${buildContext}`);
             if (dockerfilePath) {
                 console.log(`[${serviceName}] Dockerfile: ${dockerfilePath}`);
             }
-            
+
             await execCommand(buildCmd);
 
-            console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${imageName}`);
-            await execCommand(`docker push ${imageName}`);
+            if (pushTargetAnswer.target === 'lazycat') {
+                console.log(`[${serviceName}] 正在推送镜像到懒猫微服官方镜像源...`);
+                const { stdout } = await execCommand(`lzc-cli appstore copy-image ${imageName}`);
+                
+                // 从输出中提取新的镜像地址
+                const match = stdout.match(/lazycat-registry: (.*)/);
+                if (!match) {
+                    throw new Error('无法从输出中获取懒猫微服镜像地址');
+                }
+                imageName = match[1].trim();
+            } else {
+                console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${imageName}`);
+                await execCommand(`docker push ${imageName}`);
+            }
+
+            // 更新缓存
+            buildCache = {
+                ...buildCache,
+                imageName,
+                timestamp: new Date().toISOString()
+            };
+
+            cache = await updateCache(cache, {
+                [buildKey]: buildCache
+            });
 
             return imageName;
         }
@@ -921,14 +973,42 @@ async function convertApp(options = {}) {
             
             let serviceImage;
             
-            // 处理镜像或构建
-            if (service.image) {
+            // 如果同时存在 build 和 image 配置，让用户选择
+            if (service.build && service.image) {
+                const choiceAnswer = await inquirer.prompt([{
+                    type: 'list',
+                    name: 'choice',
+                    message: `[${processedName}] 同时存在构建配置和镜像配置，请选择：`,
+                    choices: [
+                        { name: '使用构建配置 (build)', value: 'build' },
+                        { name: '使用镜像配置 (image)', value: 'image' }
+                    ],
+                    default: cache[`${processedName}_build_or_image`] || 'build'
+                }]);
+
+                // 更新缓存
+                cache = await updateCache(cache, {
+                    [`${processedName}_build_or_image`]: choiceAnswer.choice
+                });
+
+                if (choiceAnswer.choice === 'build') {
+                    serviceImage = await processBuild(processedName, answers.package, cache, globalConfig, service);
+                } else {
+                    const processedImage = processEnvVariables(service.image, envConfig);
+                    serviceImage = await processImage(processedImage, answers.package, cache, globalConfig, processedName);
+                }
+            }
+            // 只有 build 配置
+            else if (service.build) {
+                serviceImage = await processBuild(processedName, answers.package, cache, globalConfig, service);
+            }
+            // 只有 image 配置
+            else if (service.image) {
                 const processedImage = processEnvVariables(service.image, envConfig);
                 serviceImage = await processImage(processedImage, answers.package, cache, globalConfig, processedName);
-            } else if (service.build) {
-                // Pass the service object to processBuild
-                serviceImage = await processBuild(processedName, answers.package, cache, globalConfig, service);
-            } else {
+            }
+            // 既没有 build 也没有 image
+            else {
                 throw new Error(`服务 ${processedName} 既没有 image 也没有 build 配置`);
             }
 
@@ -981,7 +1061,7 @@ async function convertApp(options = {}) {
             if (service.entrypoint) {
                 let processedEntrypoint;
                 if (Array.isArray(service.entrypoint)) {
-                    // 如果是数组，先处理每个元素的环境变量，然后用空格连接
+                    // 如果是数组，先处理每个元素的环境变量，然后空格连接
                     processedEntrypoint = service.entrypoint
                         .map(entry => processEnvVariables(entry, envConfig))
                         .join(' ');
@@ -1131,7 +1211,7 @@ async function convertApp(options = {}) {
                         if (volumeActionAnswer.action === 'useContent' && sourcePath) {
                             // 对于相对路径或绝对路径，使用 /lzcapp/pkg/content 中的内容
                             const relativePath = path.relative(executionDir, absoluteSourcePath);
-                            // 使用 posix 风格的路径
+                            // 使用 posix 风格路径
                             const posixPath = relativePath.split(path.sep).join(path.posix.sep);
                             manifest.services[processedName].binds.push(`/lzcapp/pkg/content/${posixPath}:${targetPath}`);
                         } else if (volumeActionAnswer.action === 'emptyDir') {
@@ -1256,25 +1336,17 @@ async function saveGlobalConfig(config) {
     }
 }
 
-// Add this function to handle image processing
+// 修改 processImage 函数
 async function processImage(imageName, packageName, cache, globalConfig, serviceName) {
-    // First check local cache
-    let registryUrl = cache.registryUrl;
-    
-    // If not in local cache, check global config
-    if (!registryUrl && globalConfig.registryUrl) {
-        registryUrl = globalConfig.registryUrl;
-    }
-    
-    // Generate cache key for this specific image - 使用完整的镜像名称
+    // 生成缓存键
     const imageKey = `image_${imageName.replace(/[/:]/g, '_')}`;
     
-    // 如果镜像缓���存在且有 newImageName，询问是否使用缓存的配置
+    // 检查缓存
     if (cache[imageKey]?.newImageName) {
         const useCacheAnswer = await inquirer.prompt([{
             type: 'confirm',
             name: 'useCache',
-            message: `[${serviceName}] 发现已缓存的镜像置，是否使用？`,
+            message: `[${serviceName}] 发现已缓存的镜像配置，是否使用？`,
             default: true
         }]);
 
@@ -1284,42 +1356,82 @@ async function processImage(imageName, packageName, cache, globalConfig, service
         }
     }
     
-    // Ask if user wants to push to remote registry
-    const pushAnswer = await inquirer.prompt([{
-        type: 'confirm',
-        name: 'push',
-        message: `[${serviceName}] 是否需要推送镜像到远程仓库？`,
-        default: cache[imageKey]?.push === undefined ? !!registryUrl : cache[imageKey]?.push
+    // 询问推送目标
+    const pushTargetAnswer = await inquirer.prompt([{
+        type: 'list',
+        name: 'target',
+        message: `[${serviceName}] 请选择镜像推送目标：`,
+        choices: [
+            { name: '不推送，直接使用原始镜像', value: 'none' },
+            { name: '推送到自定义镜像仓库', value: 'custom' },
+            { name: '推送到懒猫微服官方镜像源', value: 'lazycat' }
+        ],
+        default: cache[imageKey]?.pushTarget || 'none'
     }]);
-    
-    // 更新缓存时使用完整的对象结构
+
+    // 更新缓存
     let imageCache = {
         ...(cache[imageKey] || {}),
-        originalImage: imageName,  // 保存原始镜像名
-        push: pushAnswer.push
+        originalImage: imageName,
+        pushTarget: pushTargetAnswer.target
     };
     
     cache = await updateCache(cache, {
         [imageKey]: imageCache
     });
     
-    if (!pushAnswer.push) {
+    // 如果选择不推送，直接返回原始镜像
+    if (pushTargetAnswer.target === 'none') {
         return imageName;
     }
     
-    // Ask for registry URL if not available
+    // 如果选择推送到懒猫微服官方镜像源
+    if (pushTargetAnswer.target === 'lazycat') {
+        console.log(`[${serviceName}] 正在推送镜像到懒猫微服官方镜像源...`);
+        const result = await execCommand(`lzc-cli appstore copy-image ${imageName}`);
+        
+        // 打印完整输出以便调试
+        console.log('命令输出:', result.stdout);
+        if (result.stderr) {
+            console.log('错误输出:', result.stderr);
+        }
+        
+        const match = result.stdout.match(/lazycat-registry: (.*)/);
+        if (!match) {
+            throw new Error('无法从输出中获取懒猫微服镜像地址，请检查 lzc-cli 命令输出');
+        }
+        const lazycatImage = match[1].trim();
+        
+        // 更新缓存
+        imageCache = {
+            ...imageCache,
+            newImageName: lazycatImage,
+            timestamp: new Date().toISOString()
+        };
+        
+        cache = await updateCache(cache, {
+            [imageKey]: imageCache
+        });
+        
+        return lazycatImage;
+    }
+    
+    // 处理自定义镜像仓库的情况
+    let registryUrl = cache.registryUrl;
+    if (!registryUrl && globalConfig.registryUrl) {
+        registryUrl = globalConfig.registryUrl;
+    }
+    
     if (!registryUrl) {
         const registryAnswer = await inquirer.prompt([{
             type: 'input',
             name: 'url',
             message: '请输入远程仓库地址：',
-            validate: input => input.trim() ? true : '仓库地址不能为空',
-            default: cache[imageKey]?.registryUrl
+            validate: input => input.trim() ? true : '仓库地址不能为空'
         }]);
         
         registryUrl = registryAnswer.url;
         
-        // Ask if want to save globally
         const saveGloballyAnswer = await inquirer.prompt([{
             type: 'confirm',
             name: 'save',
@@ -1331,33 +1443,13 @@ async function processImage(imageName, packageName, cache, globalConfig, service
             await saveGlobalConfig({ ...globalConfig, registryUrl });
         }
         
-        // 更新镜像缓存和全局注册表地址
-        imageCache = {
-            ...imageCache,
-            registryUrl
-        };
-        
-        cache = await updateCache(cache, {
-            registryUrl,
-            [imageKey]: imageCache
-        });
+        cache = await updateCache(cache, { registryUrl });
     }
     
-    // Generate new image name
+    // 生成新的镜像名称并推送
     const packageBaseName = packageName.split('.').pop();
     const imageHash = crypto.createHash('md5').update(imageName).digest('hex');
     const newImageName = `${registryUrl}/${packageBaseName}:${imageHash}`;
-    
-    // 更新镜像缓存，保留之前的值
-    imageCache = {
-        ...imageCache,
-        newImageName,
-        timestamp: new Date().toISOString()  // 添加时间戳
-    };
-    
-    cache = await updateCache(cache, {
-        [imageKey]: imageCache
-    });
     
     console.log(`[${serviceName}] 正在拉取原始镜像: ${imageName}`);
     await execCommand(`docker pull ${imageName}`);
@@ -1368,10 +1460,21 @@ async function processImage(imageName, packageName, cache, globalConfig, service
     console.log(`[${serviceName}] 正在推送镜像到远程仓库: ${newImageName}`);
     await execCommand(`docker push ${newImageName}`);
     
+    // 更新缓存
+    imageCache = {
+        ...imageCache,
+        newImageName,
+        timestamp: new Date().toISOString()
+    };
+    
+    cache = await updateCache(cache, {
+        [imageKey]: imageCache
+    });
+    
     return newImageName;
 }
 
-// Add this helper function to execute commands
+// 修改 execCommand 函数
 async function execCommand(command) {
     const { exec } = require('child_process');
     return new Promise((resolve, reject) => {
@@ -1380,7 +1483,8 @@ async function execCommand(command) {
                 reject(new Error(`执行命令失败: ${error.message}`));
                 return;
             }
-            resolve(stdout.trim());
+            // 同时返回 stdout 和 stderr
+            resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
         });
     });
 }
