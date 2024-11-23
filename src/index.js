@@ -152,7 +152,6 @@ async function convertApp(options = {}) {
                 message: '请输入应用版本：',
                 default: cache.version || '0.0.1',
                 validate: input => {
-                    // 使用简单的语义化版本格式验证
                     const semverRegex = /^\d+\.\d+\.\d+$/;
                     if (!semverRegex.test(input)) {
                         return '请输入有效的版本号（例如：1.0.0）';
@@ -161,6 +160,47 @@ async function convertApp(options = {}) {
                 }
             });
         }
+
+        // 添加不支持平台的选择
+        questions.push({
+            type: 'checkbox',
+            name: 'unsupported_platforms',
+            message: '请选择不支持的平台（默认全平台支持）：',
+            choices: [
+                { name: 'iOS 和 iPad 移动端', value: 'ios' },
+                { name: 'Android 移动端', value: 'android' },
+                { name: 'Linux 桌面端', value: 'linux' },
+                { name: 'Windows 桌面端', value: 'windows' },
+                { name: 'macOS 桌面端', value: 'macos' },
+                { name: '懒猫智慧屏平台端', value: 'tvos' }
+            ],
+            default: cache.unsupported_platforms || []
+        });
+
+        // 在不支持平台选项后面添加系统版本依赖配置
+        questions.push({
+            type: 'confirm',
+            name: 'has_version_requirement',
+            message: '是否需要限制系统版本？',
+            default: cache.has_version_requirement || false
+        });
+
+        // 如果用户选择需要限制系统版本，则询问具体版本要求
+        questions.push({
+            type: 'input',
+            name: 'min_os_version',
+            message: '请输入最低系统版本要求（如: >= 1.0.18）：',
+            default: cache.min_os_version || '>= 1.0.18',
+            when: (answers) => answers.has_version_requirement,
+            validate: (input) => {
+                // 验证版本号格式
+                const versionPattern = /^(>=|>|<=|<|=)\s*\d+\.\d+\.\d+$/;
+                if (!versionPattern.test(input.trim())) {
+                    return '请输入正确的版本号格式，如: >= 1.0.18';
+                }
+                return true;
+            }
+        });
 
         if (!options.description) {
             questions.push({
@@ -415,6 +455,16 @@ async function convertApp(options = {}) {
             },
             services: {}
         };
+
+        // 如果选择了不支持的平台，添加到 manifest 中
+        if (answers.unsupported_platforms && answers.unsupported_platforms.length > 0) {
+            manifest.unsupported_platforms = answers.unsupported_platforms;
+        }
+
+        // 更新缓存
+        cache = await updateCache(cache, {
+            unsupported_platforms: answers.unsupported_platforms
+        });
 
         // 添加公开路由配置
         if (answers.public_paths) {
@@ -1210,7 +1260,7 @@ async function convertApp(options = {}) {
 
                         // 检查目录是否存在
                         let choices = [
-                            { name: '挂载空��录', value: 'emptyDir' },
+                            { name: '挂载空目录', value: 'emptyDir' },
                             { name: '忽略挂载', value: 'ignore' }
                         ];
 
@@ -1316,7 +1366,7 @@ async function promptMountLocation(name, targetPath, cache) {
             cache
         };
     } else {
-        // 询问用户文稿数据���录的子目录名称
+        // 询问用户文稿数据录的子目录名称
         const subDirAnswer = await inquirer.prompt([{
             type: 'input',
             name: 'subdir',
@@ -1414,7 +1464,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
         return imageName;
     }
     
-    // ���果选择推送到懒猫微服官方镜像源
+    // 果选择推送到懒猫微服官方镜像源
     if (pushTargetAnswer.target === 'lazycat') {
         console.log(`[${serviceName}] 正在推送镜像到懒猫微服官方镜像源...`);
         const result = await execCommand(`lzc-cli appstore copy-image ${imageName}`);
