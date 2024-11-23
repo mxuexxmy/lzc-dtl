@@ -140,7 +140,7 @@ async function convertApp(options = {}) {
             questions.push({
                 type: 'input',
                 name: 'package',
-                message: '请输入应用名：',
+                message: '请输入应用包名：',
                 default: cache.package || undefined
             });
         }
@@ -1072,18 +1072,16 @@ async function convertApp(options = {}) {
                 manifest.services[processedName].entrypoint = processedEntrypoint;
             }
 
-            // 处理依赖关系中的环境变量
+            // 修改处理依赖关系的部分
             if (service.depends_on) {
                 if (Array.isArray(service.depends_on)) {
                     manifest.services[processedName].depends_on = service.depends_on.map(dep => 
                         processEnvVariables(dep, envConfig)
                     );
                 } else {
-                    manifest.services[processedName].depends_on = Object.fromEntries(
-                        Object.entries(service.depends_on).map(([key, value]) => [
-                            processEnvVariables(key, envConfig),
-                            value
-                        ])
+                    // 对于对象格式的 depends_on，只取服务名称
+                    manifest.services[processedName].depends_on = Object.keys(service.depends_on).map(dep =>
+                        processEnvVariables(dep, envConfig)
                     );
                 }
             }
