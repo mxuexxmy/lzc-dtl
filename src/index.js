@@ -438,7 +438,8 @@ async function convertApp(options = {}) {
                 { name: 'HTTP路由', value: 'http' },
                 { name: 'HTTPS路由', value: 'https' },
                 { name: 'TCP/UDP端口暴露', value: 'port' },
-                { name: '从docker-compose读取端口', value: 'from_compose' }
+                { name: '从docker-compose读取端口', value: 'from_compose' },
+                { name: '静态文件路由', value: 'static' }
             ];
 
             // 询问是否需要添更多路由
@@ -694,6 +695,36 @@ async function convertApp(options = {}) {
                         config: {
                             path: httpConfig.path,
                             target: target
+                        }
+                    });
+                } else if (routeTypeAnswer.type === 'static') {
+                    const staticConfig = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'path',
+                            message: '请输入路由路径（如 /）：',
+                            default: cache.lastStaticPath || '/'
+                        },
+                        {
+                            type: 'input',
+                            name: 'contentPath',
+                            message: '请输入静态文件目录路径（相对于应用包内容目录）：',
+                            default: cache.lastContentPath || 'web'
+                        }
+                    ]);
+
+                    // 更新缓存
+                    cache = await updateCache(cache, {
+                        lastStaticPath: staticConfig.path,
+                        lastContentPath: staticConfig.contentPath
+                    });
+
+                    // 添加静态文件路由
+                    routes.push({
+                        type: 'http',
+                        config: {
+                            path: staticConfig.path,
+                            target: `file:///lzcapp/pkg/content/${staticConfig.contentPath}`
                         }
                     });
                 }
@@ -1179,7 +1210,7 @@ async function convertApp(options = {}) {
 
                         // 检查目录是否存在
                         let choices = [
-                            { name: '挂载空目录', value: 'emptyDir' },
+                            { name: '挂载空��录', value: 'emptyDir' },
                             { name: '忽略挂载', value: 'ignore' }
                         ];
 
@@ -1285,7 +1316,7 @@ async function promptMountLocation(name, targetPath, cache) {
             cache
         };
     } else {
-        // 询问用户文稿数据目录的子目录名称
+        // 询问用户文稿数据���录的子目录名称
         const subDirAnswer = await inquirer.prompt([{
             type: 'input',
             name: 'subdir',
@@ -1383,7 +1414,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
         return imageName;
     }
     
-    // 如果选择推送到懒猫微服官方镜像源
+    // ���果选择推送到懒猫微服官方镜像源
     if (pushTargetAnswer.target === 'lazycat') {
         console.log(`[${serviceName}] 正在推送镜像到懒猫微服官方镜像源...`);
         const result = await execCommand(`lzc-cli appstore copy-image ${imageName}`);
