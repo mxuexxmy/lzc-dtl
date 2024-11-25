@@ -397,7 +397,7 @@ async function convertApp(options = {}) {
                 }]);
                 options.compose = composeAnswer.composePath;
                 
-                // 使用辅助函数更新缓存
+                // 使用���助函数更新缓存
                 cache = await updateCache(cache, { composePath: options.compose });
             }
         }
@@ -1099,9 +1099,34 @@ async function convertApp(options = {}) {
 
             // 处理环境变量
             if (service.env_file) {
-                const envFilePath = path.resolve(executionDir, processEnvVariables(service.env_file, envConfig));
-                const fileEnvConfig = dotenv.config({ path: envFilePath }).parsed || {};
-                manifest.services[processedName].environment = Object.entries(fileEnvConfig).map(
+                let envFiles = [];
+                if (Array.isArray(service.env_file)) {
+                    envFiles = service.env_file;
+                } else {
+                    envFiles = [service.env_file];
+                }
+
+                // 合并所有环境变量文件的内容
+                let mergedEnvConfig = {};
+                for (const envFile of envFiles) {
+                    const envFilePath = path.resolve(executionDir, processEnvVariables(envFile, envConfig));
+                    try {
+                        if (await fs.pathExists(envFilePath)) {
+                            const fileEnvConfig = dotenv.config({ path: envFilePath }).parsed || {};
+                            // 后面的文件会覆盖前面文件中的同名变量
+                            mergedEnvConfig = {
+                                ...mergedEnvConfig,
+                                ...fileEnvConfig
+                            };
+                        } else {
+                            console.warn(`警告: 环境变量文件 ${envFilePath} 不存在`);
+                        }
+                    } catch (error) {
+                        console.warn(`警告: 读取环境变量文件 ${envFilePath} 失败:`, error.message);
+                    }
+                }
+
+                manifest.services[processedName].environment = Object.entries(mergedEnvConfig).map(
                     ([key, value]) => `${processEnvVariables(key, envConfig)}=${processEnvVariables(value, envConfig)}`
                 );
             } else if (service.environment) {
