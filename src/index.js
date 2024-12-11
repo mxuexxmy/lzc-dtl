@@ -397,7 +397,7 @@ async function convertApp(options = {}) {
                 }]);
                 options.compose = composeAnswer.composePath;
                 
-                // 使用���助函数更新缓存
+                // 使用辅助函数更新缓存
                 cache = await updateCache(cache, { composePath: options.compose });
             }
         }
@@ -758,7 +758,7 @@ async function convertApp(options = {}) {
                         {
                             type: 'input',
                             name: 'contentPath',
-                            message: '请输入静态文件目录路径（相对于应用包内容目录）：',
+                            message: '请��入静态文件目录路径（相对于应用包内容目录）：',
                             default: cache.lastContentPath || 'web'
                         }
                     ]);
@@ -1298,7 +1298,7 @@ async function convertApp(options = {}) {
                             }
                         }
 
-                        // 询问用户如何处理挂载
+                        // 询问用户如何处理��载
                         const volumeActionAnswer = await inquirer.prompt([{
                             type: 'list',
                             name: 'action',
@@ -1324,6 +1324,51 @@ async function convertApp(options = {}) {
                             cache = newCache;  // 更新缓存
                         }
                     }
+                }
+            }
+
+            // 处理 healthcheck 配置
+            if (service.healthcheck) {
+                // 如果 healthcheck 被禁用
+                if (service.healthcheck.disable === true) {
+                    manifest.services[processedName].health_check = {
+                        disable: true
+                    };
+                } else {
+                    const healthCheck = {};
+
+                    // 处理测试命令
+                    if (service.healthcheck.test) {
+                        if (Array.isArray(service.healthcheck.test)) {
+                            healthCheck.test = service.healthcheck.test.map(cmd => 
+                                processEnvVariables(cmd, envConfig)
+                            );
+                        } else if (typeof service.healthcheck.test === 'string') {
+                            // 如果是字符串，拆分成数组
+                            healthCheck.test = [processEnvVariables(service.healthcheck.test, envConfig)];
+                        }
+                    }
+
+                    // 处理 start_period
+                    if (service.healthcheck.start_period) {
+                        // 确保时间格式正确（支持 10s, 1m 等格式）
+                        let startPeriod = service.healthcheck.start_period;
+                        if (typeof startPeriod === 'string') {
+                            // 已经是字符串格式，直接使用
+                            healthCheck.start_period = startPeriod;
+                        } else if (typeof startPeriod === 'number') {
+                            // 如果是数字，假设是秒数，转换为字符串格式
+                            healthCheck.start_period = `${startPeriod}s`;
+                        }
+                    }
+
+                    // 如果有 test_url 配置（这是一个扩展配置）
+                    if (service.healthcheck.test_url) {
+                        healthCheck.test_url = processEnvVariables(service.healthcheck.test_url, envConfig);
+                    }
+
+                    // 添加到服务配置中
+                    manifest.services[processedName].health_check = healthCheck;
                 }
             }
         }
@@ -1385,7 +1430,7 @@ async function promptMountLocation(name, targetPath, cache) {
     });
 
     if (mountLocationAnswer.location === 'app_data') {
-        // 挂载到应用内部数据目录
+        // 挂载���应用内部数据目录
         return {
             bindMount: `/lzcapp/var/${path.basename(targetPath)}:${targetPath}`,
             cache
