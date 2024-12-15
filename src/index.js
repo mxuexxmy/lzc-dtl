@@ -301,38 +301,63 @@ async function convertApp(options = {}) {
                 cache = await updateCache(cache, { public_paths: publicPaths });
             }
 
-            // 如果选择了文件关联，收集文件关联配置
+            // 修改文件关联配置的收集部分
             if (answers.app_features.includes('file_handler')) {
                 let mimeTypes = [];
-                let extensions = [];
                 let addMoreTypes = true;
+
+                // 从缓存中获取上次的 MIME 类型
+                const cachedMimeTypes = cache.mime_types || [];
+                
+                // 如果有缓存的 MIME 类型，询问是否使用
+                if (cachedMimeTypes.length > 0) {
+                    const useCacheAnswer = await inquirer.prompt([{
+                        type: 'confirm',
+                        name: 'useCache',
+                        message: `发现已缓存的MIME类型配置 [${cachedMimeTypes.join(', ')}]，是否使用？`,
+                        default: true
+                    }]);
+
+                    if (useCacheAnswer.useCache) {
+                        mimeTypes = [...cachedMimeTypes];
+                        addMoreTypes = false;
+                    }
+                }
 
                 while (addMoreTypes) {
                     const fileHandlerAnswers = await inquirer.prompt([
                         {
                             type: 'input',
-                            name: 'mime_type',
-                            message: '请输入支持的MIME类型（如 audio/mpeg）：',
-                            validate: input => input.trim() ? true : '请输入有效的MIME类型'
-                        },
-                        {
-                            type: 'input',
-                            name: 'extension',
-                            message: '请输入对应的文件扩展名（如 .mp3）：',
-                            validate: input => input.trim() ? true : '请输入有效的文件扩展名'
+                            name: 'mime_types',
+                            message: '请输入支持的MIME类型（多个类型用空格分隔，如 audio/mpeg audio/mp3）：',
+                            default: cachedMimeTypes.join(' ') || undefined,
+                            validate: input => {
+                                if (!input.trim()) return '请输入至少一个MIME类型';
+                                // 简单验证MIME格式
+                                const types = input.trim().split(/\s+/);
+                                const invalidTypes = types.filter(type => !type.includes('/'));
+                                if (invalidTypes.length > 0) {
+                                    return `无效的MIME类型: ${invalidTypes.join(', ')}`;
+                                }
+                                return true;
+                            }
                         },
                         {
                             type: 'confirm',
                             name: 'addMore',
-                            message: '是否继续添加文件类型？',
+                            message: '是否继续添加MIME类型？',
                             default: false
                         }
                     ]);
 
-                    mimeTypes.push(fileHandlerAnswers.mime_type.trim());
-                    extensions.push(fileHandlerAnswers.extension.trim());
+                    // 分割输入的MIME类型并添加到数组
+                    const newTypes = fileHandlerAnswers.mime_types.trim().split(/\s+/);
+                    mimeTypes.push(...newTypes);
                     addMoreTypes = fileHandlerAnswers.addMore;
                 }
+
+                // 去重
+                mimeTypes = [...new Set(mimeTypes)];
 
                 // 收集打开文件的路由路径
                 const openActionAnswer = await inquirer.prompt([{
@@ -345,13 +370,11 @@ async function convertApp(options = {}) {
 
                 answers.file_handler = {
                     mime: mimeTypes,
-                    extensions: extensions,
                     actions: { open: openActionAnswer.open_action }
                 };
 
                 cache = await updateCache(cache, {
                     mime_types: mimeTypes,
-                    extensions: extensions,
                     open_action: openActionAnswer.open_action
                 });
             }
@@ -397,7 +420,7 @@ async function convertApp(options = {}) {
                 }]);
                 options.compose = composeAnswer.composePath;
                 
-                // 使用辅助函数更新缓存
+                // 使用辅助函��更新缓存
                 cache = await updateCache(cache, { composePath: options.compose });
             }
         }
@@ -455,6 +478,14 @@ async function convertApp(options = {}) {
             },
             services: {}
         };
+
+        // 添加文件关联配置
+        if (answers.file_handler) {
+            manifest.application.file_handler = {
+                mime: answers.file_handler.mime,
+                actions: answers.file_handler.actions
+            };
+        }
 
         // 如果选择了不支持的平台，添加到 manifest 中
         if (answers.unsupported_platforms && answers.unsupported_platforms.length > 0) {
@@ -534,7 +565,7 @@ async function convertApp(options = {}) {
                                 containerPort = containerPort.split('/')[0];
                                 hostPort = hostPort.split('/')[0];
                                 
-                                // 生成一个更有结构的缓存键
+                                // 生成个更有结构的缓存键
                                 const cacheKey = `port_mappings`;
                                 const mappingKey = `${serviceName}_${hostPort}_${containerPort}`;
                                 
@@ -618,7 +649,7 @@ async function convertApp(options = {}) {
                                             }
                                         });
 
-                                        // 构建 URL，确保路径正确拼接
+                                        // 构建 URL，确保路径��确拼接
                                         const targetPath = targetPathAnswer.targetPath.startsWith('/') ? targetPathAnswer.targetPath : '/' + targetPathAnswer.targetPath;
                                         const target = `${routeTypeForPort.type}://${serviceName}.${answers.package}.lzcapp:${containerPort}${targetPath}`;
 
@@ -758,7 +789,7 @@ async function convertApp(options = {}) {
                         {
                             type: 'input',
                             name: 'contentPath',
-                            message: '请��入静态文件目录路径（相对于应用包内容目录）：',
+                            message: '请输入静态文件目录路径（相对于应用包内容目录）：',
                             default: cache.lastContentPath || 'web'
                         }
                     ]);
@@ -1178,7 +1209,7 @@ async function convertApp(options = {}) {
                 manifest.services[processedName].entrypoint = processedEntrypoint;
             }
 
-            // 修改处理依赖关系的部分
+            // 修改处理依赖关系部分
             if (service.depends_on) {
                 if (Array.isArray(service.depends_on)) {
                     manifest.services[processedName].depends_on = service.depends_on.map(dep => 
@@ -1220,7 +1251,7 @@ async function convertApp(options = {}) {
                             // 处理匿名卷
                             targetPath = volumeParts[0].trim();
                             
-                            // 询问用户如何处理匿名卷
+                            // 询问���户如何处理匿名卷
                             const volumeActionAnswer = await inquirer.prompt([{
                                 type: 'list',
                                 name: 'action',
@@ -1298,7 +1329,7 @@ async function convertApp(options = {}) {
                             }
                         }
 
-                        // 询问用户如何处理��载
+                        // 询问用户如何处理挂载
                         const volumeActionAnswer = await inquirer.prompt([{
                             type: 'list',
                             name: 'action',
@@ -1376,7 +1407,7 @@ async function convertApp(options = {}) {
         // 写入 manifest.yml
         await fs.writeFile('manifest.yml', YAML.stringify(manifest));
 
-        // 复制图标文件，如果源文件和目标文件不同才复制
+        // 复制图标文件，如果源文件和标文件不同才复制
         const iconDestPath = path.join(process.cwd(), 'icon.png');
         if (path.resolve(options.icon) !== path.resolve(iconDestPath)) {
             await fs.copy(options.icon, iconDestPath);
@@ -1430,7 +1461,7 @@ async function promptMountLocation(name, targetPath, cache) {
     });
 
     if (mountLocationAnswer.location === 'app_data') {
-        // 挂载���应用内部数据目录
+        // 挂载应用内部数据目录
         return {
             bindMount: `/lzcapp/var/${path.basename(targetPath)}:${targetPath}`,
             cache
@@ -1529,7 +1560,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
         [imageKey]: imageCache
     });
     
-    // 如果选择不推送，直接返回原始镜像
+    // 如果选择推送，直接返回原始镜像
     if (pushTargetAnswer.target === 'none') {
         return imageName;
     }
@@ -1576,7 +1607,7 @@ async function processImage(imageName, packageName, cache, globalConfig, service
             type: 'input',
             name: 'url',
             message: '请输入远程仓库地址：',
-            validate: input => input.trim() ? true : '仓库地址不能为空'
+            validate: input => input.trim() ? true : '仓库地址不能���空'
         }]);
         
         registryUrl = registryAnswer.url;
