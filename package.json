@@ -1,10 +1,10 @@
 {
   "name": "lzc-dtl",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "懒猫微服应用转换器",
   "main": "src/index.js",
   "bin": {
-    "lzc-dtl": "./bin/lzc-dtl.js"
+    "lzc-dtl": "bin/lzc-dtl.js"
   },
   "dependencies": {
     "archiver": "^5.3.1",
